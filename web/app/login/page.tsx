@@ -1,10 +1,14 @@
 "use client";
 
 import { useState } from "react";
+import { useRouter, useSearchParams } from "next/navigation";
 import { createClient } from "@/lib/supabase/client";
 
 export default function LoginPage() {
   const supabase = createClient();
+  const router = useRouter();
+  const searchParams = useSearchParams();
+
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [loading, setLoading] = useState(false);
@@ -15,11 +19,28 @@ export default function LoginPage() {
     setMsg(null);
     setLoading(true);
 
-    const { error } = await supabase.auth.signInWithPassword({ email, password });
+    const { data, error } = await supabase.auth.signInWithPassword({ email, password });
 
+    if (error) {
+      setLoading(false);
+      setMsg(error.message);
+      return;
+    }
+
+    // Garantir que a sessão existe (e que cookies/sessão foram persistidos)
+    const session = data?.session;
+    if (!session) {
+      setLoading(false);
+      setMsg("Login efetuado, mas sessão não foi criada. Verifica configurações do Supabase Auth.");
+      return;
+    }
+
+    setMsg("Login efetuado. A redirecionar...");
     setLoading(false);
-    if (error) setMsg(error.message);
-    else window.location.href = "/";
+
+    const next = searchParams.get("next");
+    router.replace(next ?? "/");
+    router.refresh();
   }
 
   return (
@@ -51,7 +72,7 @@ export default function LoginPage() {
           />
         </div>
 
-        {msg && <p className="text-sm text-red-600">{msg}</p>}
+        {msg && <p className="text-sm">{msg}</p>}
 
         <button
           type="submit"
