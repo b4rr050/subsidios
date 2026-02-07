@@ -2,10 +2,8 @@
 
 import { useState } from "react";
 import { useRouter } from "next/navigation";
-import { createClient } from "@/lib/supabase/client";
 
 export default function LoginPage() {
-  const supabase = createClient();
   const router = useRouter();
 
   const [email, setEmail] = useState("");
@@ -18,18 +16,22 @@ export default function LoginPage() {
     setMsg(null);
     setLoading(true);
 
-    const { error } = await supabase.auth.signInWithPassword({ email, password });
+    const res = await fetch("/api/auth/login", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ email, password }),
+    });
 
-    if (error) {
-      setLoading(false);
-      setMsg(error.message);
+    const data = await res.json().catch(() => ({}));
+
+    setLoading(false);
+
+    if (!res.ok || data?.ok !== true) {
+      setMsg(data?.error ?? "Erro no login");
       return;
     }
 
     setMsg("Login efetuado. A redirecionar...");
-    setLoading(false);
-
-    // Redireciona para "/" e deixa o server decidir destino por role
     router.replace("/");
     router.refresh();
   }
