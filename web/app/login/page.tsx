@@ -1,13 +1,12 @@
 "use client";
 
 import { useState } from "react";
-import { useRouter, useSearchParams } from "next/navigation";
+import { useRouter } from "next/navigation";
 import { createClient } from "@/lib/supabase/client";
 
 export default function LoginPage() {
   const supabase = createClient();
   const router = useRouter();
-  const searchParams = useSearchParams();
 
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
@@ -19,7 +18,7 @@ export default function LoginPage() {
     setMsg(null);
     setLoading(true);
 
-    const { data, error } = await supabase.auth.signInWithPassword({ email, password });
+    const { error } = await supabase.auth.signInWithPassword({ email, password });
 
     if (error) {
       setLoading(false);
@@ -27,19 +26,11 @@ export default function LoginPage() {
       return;
     }
 
-    // Garantir que a sessão existe (e que cookies/sessão foram persistidos)
-    const session = data?.session;
-    if (!session) {
-      setLoading(false);
-      setMsg("Login efetuado, mas sessão não foi criada. Verifica configurações do Supabase Auth.");
-      return;
-    }
-
     setMsg("Login efetuado. A redirecionar...");
     setLoading(false);
 
-    const next = searchParams.get("next");
-    router.replace(next ?? "/");
+    // Redireciona para "/" e deixa o server decidir destino por role
+    router.replace("/");
     router.refresh();
   }
 
