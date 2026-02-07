@@ -1,0 +1,22 @@
+# OS
+.DS_Store
+
+# Node
+node_modules
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+
+# Next.js
+.next
+out
+build
+
+# Env
+.env
+.env.*
+!.env.example
+
+# Supabase
+.supabase
