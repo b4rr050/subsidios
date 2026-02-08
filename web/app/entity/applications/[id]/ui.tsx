@@ -42,12 +42,25 @@ export default function EntityApplicationClient({
   documents,
   documentTypes,
   history,
+
+  // ✅ props extra que o teu page.tsx já passa
+  entityId,
+  debugDocTypes,
 }: {
   application: App;
   categories: Category[];
   documents: DocRow[];
   documentTypes: DocType[];
   history: Hist[];
+
+  // ✅ aceitamos para não dar erro de TS, mesmo que não uses já
+  entityId?: string | null;
+  debugDocTypes?: {
+    total?: number;
+    active?: number;
+    byScope?: Record<string, number>;
+    scopes?: string[];
+  };
 }) {
   const router = useRouter();
   const supabase = createClient();
@@ -164,8 +177,6 @@ export default function EntityApplicationClient({
 
     setLoading(true);
 
-    // 1) upload ao storage
-    const ext = file.name.includes(".") ? file.name.split(".").pop() : "bin";
     const safeName = file.name.replace(/[^\w.\-() ]+/g, "_");
     const storagePath = `applications/${application.id}/${Date.now()}_${safeName}`;
 
@@ -181,7 +192,6 @@ export default function EntityApplicationClient({
       return;
     }
 
-    // 2) gravar registo em documents
     const res = await fetch(`/api/entity/applications/${application.id}/documents/create`, {
       method: "POST",
       headers: { "content-type": "application/json" },
@@ -211,7 +221,7 @@ export default function EntityApplicationClient({
   async function onDeleteDraft() {
     if (!canDeleteDraft) return;
 
-    const ok1 = window.confirm("Eliminar este pedido em rascunho? (não pode ser recuperado pela entidade)");
+    const ok1 = window.confirm("Eliminar este pedido em rascunho? (a entidade deixa de o ver)");
     if (!ok1) return;
 
     const ok2 = window.confirm("Confirma: queres mesmo ELIMINAR este rascunho?");
@@ -239,12 +249,17 @@ export default function EntityApplicationClient({
 
   return (
     <div className="space-y-6">
-      {/* Dados do pedido */}
       <section className="rounded-2xl border p-4 shadow-sm">
         <div className="flex items-start justify-between gap-4">
           <div>
-            <h2 className="font-medium">Dados do pedido</h2>
-            <p className="text-xs text-neutral-500 mt-1">ID: {application.id}</p>
+            <h2 className="font-medium">Pedido</h2>
+            <p className="text-xs text-neutral-500 mt-1">
+              ID pedido: {application.id}
+              {entityId ? ` • Entity: ${entityId}` : ""}
+            </p>
+            <p className="text-xs text-neutral-500">
+              Valor atual: {money(application.requested_amount)}
+            </p>
           </div>
 
           <span className="text-sm rounded-md border px-2 py-1">{status}</span>
@@ -311,7 +326,6 @@ export default function EntityApplicationClient({
 
             <div className="flex-1" />
 
-            {/* ✅ Eliminar rascunho */}
             <button
               type="button"
               className="rounded-md border px-3 py-2 text-sm text-red-700 disabled:opacity-60"
@@ -325,9 +339,15 @@ export default function EntityApplicationClient({
 
           {msg && <p className="text-sm mt-2">{msg}</p>}
         </form>
+
+        {/* Debug opcional (se já estavas a passar isto, mostramos de forma discreta) */}
+        {debugDocTypes?.total != null && (
+          <p className="mt-3 text-xs text-neutral-500">
+            Tipos: {debugDocTypes.active ?? "-"} ativos / {debugDocTypes.total ?? "-"} total
+          </p>
+        )}
       </section>
 
-      {/* Documentos (Candidatura) */}
       <section className="rounded-2xl border p-4 shadow-sm">
         <h2 className="font-medium">Documentos (Candidatura)</h2>
 
@@ -410,7 +430,6 @@ export default function EntityApplicationClient({
         </div>
       </section>
 
-      {/* Histórico de estados */}
       <section className="rounded-2xl border p-4 shadow-sm">
         <h2 className="font-medium mb-3">Histórico de estados</h2>
         <div className="overflow-auto">
