@@ -22,12 +22,7 @@ export default async function EntityApplicationDetailPage({ params }: { params: 
 
   if (!user) redirect("/login");
 
-  const { data: profile } = await supabase
-    .from("profiles")
-    .select("entity_id")
-    .eq("id", user.id)
-    .single();
-
+  const { data: profile } = await supabase.from("profiles").select("entity_id").eq("id", user.id).single();
   const entityId = profile?.entity_id;
   if (!entityId) redirect("/unauthorized");
 
@@ -42,17 +37,16 @@ export default async function EntityApplicationDetailPage({ params }: { params: 
       <div className="p-6">
         <h1 className="text-xl font-semibold">Pedido</h1>
         <p className="mt-2 text-sm text-red-600">Pedido não encontrado.</p>
+        <a className="mt-4 inline-block rounded-md border px-3 py-2 text-sm" href="/entity">
+          Voltar
+        </a>
       </div>
     );
   }
 
   if (app.entity_id !== entityId) redirect("/unauthorized");
 
-  const { data: categories } = await supabase
-    .from("categories")
-    .select("id, name")
-    .eq("is_active", true)
-    .order("name");
+  const { data: categories } = await supabase.from("categories").select("id, name").eq("is_active", true).order("name");
 
   const { data: history } = await supabase
     .from("application_status_history")
@@ -61,16 +55,14 @@ export default async function EntityApplicationDetailPage({ params }: { params: 
     .order("changed_at", { ascending: false })
     .limit(50);
 
-  const { data: allDocTypes, error: docTypesErr } = await supabase
+  const { data: allDocTypes } = await supabase
     .from("document_types")
     .select("id, name, scope, is_active")
     .eq("is_active", true)
     .order("name");
 
-  const documentTypes =
-    (allDocTypes ?? []).filter((d) => String(d.scope).trim().toUpperCase() === "APPLICATION") ?? [];
+  const documentTypes = (allDocTypes ?? []).filter((d) => String(d.scope).trim().toUpperCase() === "APPLICATION");
 
-  // ✅ IMPORTANTE: ler storage_path (porque no teu schema é NOT NULL)
   const { data: documents } = await supabase
     .from("documents")
     .select("id, document_type_id, storage_path, file_path, original_name, mime_type, size_bytes, status, uploaded_at, review_comment")
@@ -87,6 +79,7 @@ export default async function EntityApplicationDetailPage({ params }: { params: 
           <p className="text-sm text-neutral-600">{app.id}</p>
         </div>
 
+        {/* ✅ VOLTAR SEMPRE À LISTA */}
         <a className="rounded-md border px-3 py-2 text-sm" href="/entity">
           Voltar
         </a>
@@ -94,16 +87,12 @@ export default async function EntityApplicationDetailPage({ params }: { params: 
 
       <ApplicationClient
         application={app as any}
-        categories={categories ?? []}
-        history={history ?? []}
+        categories={(categories ?? []) as any}
+        history={(history ?? []) as any}
         entityId={entityId}
         documentTypes={documentTypes as any}
         documents={(documents ?? []) as any}
-        debugDocTypes={{
-          totalActive: allDocTypes?.length ?? 0,
-          applicationActive: documentTypes.length,
-          error: docTypesErr?.message ?? null,
-        }}
+        debugDocTypes={{ totalActive: 0, applicationActive: 0, error: null }}
       />
     </div>
   );

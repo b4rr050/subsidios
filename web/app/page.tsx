@@ -10,19 +10,15 @@ export default async function HomePage() {
 
   if (!user) redirect("/login");
 
-  const { data: roles, error } = await supabase.rpc("my_roles");
+  const [{ data: isAdmin }, { data: isTech }, { data: isEntity }] = await Promise.all([
+    supabase.rpc("has_role", { role: "ADMIN" }),
+    supabase.rpc("has_role", { role: "TECH" }),
+    supabase.rpc("has_role", { role: "ENTITY" }),
+  ]);
 
-  if (error) {
-    // fallback: se falhar, manda para uma página neutra
-    redirect("/unauthorized");
-  }
+  if (isAdmin === true) redirect("/admin/users");
+  if (isTech === true) redirect("/backoffice/applications");
+  if (isEntity === true) redirect("/entity");
 
-  const r = new Set((roles ?? []).map(String));
-
-  if (r.has("ADMIN")) redirect("/admin/users");
-  if (r.has("TECH")) redirect("/backoffice/applications");
-  if (r.has("ENTITY")) redirect("/entity");
-
-  // Se não tiver role nenhum
   redirect("/unauthorized");
 }

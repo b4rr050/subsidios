@@ -20,9 +20,7 @@ export default async function EntityLayout({ children }: { children: ReactNode }
         </Link>
 
         <form action="/api/auth/logout" method="post">
-          <button className="rounded-md border px-3 py-1 text-sm">
-            Logout
-          </button>
+          <button className="rounded-md border px-3 py-1 text-sm">Logout</button>
         </form>
       </header>
 

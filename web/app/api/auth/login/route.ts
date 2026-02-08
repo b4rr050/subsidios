@@ -1,50 +1,47 @@
-import { NextRequest, NextResponse } from "next/server";
-import { createServerClient } from "@supabase/ssr";
-import { z } from "zod";
+import { NextResponse } from "next/server";
+import { createClient } from "@/lib/supabase/server";
 
-const BodySchema = z.object({
-  email: z.string().email(),
-  password: z.string().min(1),
-});
+async function roleRedirect(supabase: any) {
+  // Atenção: usa RPC has_role(role text) que já tinhas no projeto
+  const [{ data: isAdmin }, { data: isTech }, { data: isEntity }] = await Promise.all([
+    supabase.rpc("has_role", { role: "ADMIN" }),
+    supabase.rpc("has_role", { role: "TECH" }),
+    supabase.rpc("has_role", { role: "ENTITY" }),
+  ]);
 
-export async function POST(req: NextRequest) {
-  const json = await req.json().catch(() => null);
-  const parsed = BodySchema.safeParse(json);
+  if (isAdmin === true) return "/admin/users";
+  if (isTech === true) return "/backoffice/applications";
+  if (isEntity === true) return "/entity";
+  return "/unauthorized";
+}
 
-  if (!parsed.success) {
-    return NextResponse.json({ ok: false, error: "Invalid payload" }, { status: 400 });
-  }
+export async function POST(req: Request) {
+  try {
+    const supabase = await createClient();
+    const { email, password } = await req.json();
 
-  // Importante: criar o response primeiro para podermos setar cookies nele
-  const res = NextResponse.json({ ok: true });
-
-  const supabase = createServerClient(
-    process.env.NEXT_PUBLIC_SUPABASE_URL!,
-    process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!,
-    {
-      cookies: {
-        getAll() {
-          return req.cookies.getAll();
-        },
-        setAll(cookiesToSet) {
-          cookiesToSet.forEach(({ name, value, options }) => {
-            res.cookies.set(name, value, options);
-          });
-        },
-      },
+    if (!email || !password) {
+      return NextResponse.json({ ok: false, error: "Email e palavra-passe são obrigatórios." }, { status: 400 });
     }
-  );
 
-  const { email, password } = parsed.data;
-  const { data, error } = await supabase.auth.signInWithPassword({ email, password });
+    const { error } = await supabase.auth.signInWithPassword({ email, password });
+    if (error) {
+      return NextResponse.json({ ok: false, error: error.message }, { status: 401 });
+    }
 
-  if (error) {
-    return NextResponse.json({ ok: false, error: error.message }, { status: 401 });
+    // garantir que há user
+    const {
+      data: { user },
+    } = await supabase.auth.getUser();
+
+    if (!user) {
+      return NextResponse.json({ ok: false, error: "Sessão inválida após login." }, { status: 401 });
+    }
+
+    const redirectTo = await roleRedirect(supabase);
+
+    return NextResponse.json({ ok: true, redirectTo });
+  } catch (e: any) {
+    return NextResponse.json({ ok: false, error: e?.message ?? "Erro inesperado no login." }, { status: 500 });
   }
-
-  // Reescreve o body no mesmo response (já com cookies)
-  return NextResponse.json(
-    { ok: true, userId: data.user?.id ?? null },
-    { headers: res.headers }
-  );
 }
