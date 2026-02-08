@@ -11,7 +11,12 @@ const BodySchema = z.object({
 
 const EDITABLE = new Set(["S1_DRAFT", "S2_SUBMITTED", "S3_IN_REVIEW", "S4_RETURNED"]);
 
-export async function POST(req: NextRequest, ctx: { params: { id: string } }) {
+export async function POST(
+  req: NextRequest,
+  ctx: { params: Promise<{ id: string }> }
+) {
+  const { id: appId } = await ctx.params;
+
   const supabase = await createClient();
 
   const { data: userData } = await supabase.auth.getUser();
@@ -31,8 +36,6 @@ export async function POST(req: NextRequest, ctx: { params: { id: string } }) {
     .single();
 
   if (!profile?.entity_id) return NextResponse.json({ ok: false, error: "No entity linked" }, { status: 400 });
-
-  const appId = ctx.params.id;
 
   const { data: app, error: appErr } = await supabase
     .from("applications")
