@@ -3,7 +3,7 @@ import { createClient } from "@/lib/supabase/server";
 
 type InsertApp = {
   entity_id: string;
-  category_id: string | null;
+  category_id: string;
   object_title: string;
   object_normalized: string;
   requested_amount: number | null;
@@ -13,11 +13,6 @@ type InsertApp = {
 };
 
 function normalizeTitle(input: string) {
-  // normalização simples e estável para preencher object_normalized (NOT NULL)
-  // - lower
-  // - remove acentos
-  // - troca espaços por hífen
-  // - remove caracteres inválidos
   const s = (input ?? "")
     .trim()
     .toLowerCase()
@@ -29,7 +24,6 @@ function normalizeTitle(input: string) {
     .replace(/\s/g, "-")
     .replace(/-+/g, "-");
 
-  // fallback para nunca ficar vazio
   return s.length ? s : `pedido-${Date.now()}`;
 }
 
@@ -40,19 +34,16 @@ async function isEntityUser() {
 }
 
 export default async function EntityNewApplicationPage() {
-  // Permissões
   if (!(await isEntityUser())) redirect("/unauthorized");
 
   const supabase = await createClient();
 
-  // Sessão
   const {
     data: { user },
   } = await supabase.auth.getUser();
 
   if (!user) redirect("/login");
 
-  // Entity do utilizador
   const { data: profile, error: profErr } = await supabase
     .from("profiles")
     .select("entity_id")
@@ -64,11 +55,23 @@ export default async function EntityNewApplicationPage() {
   const entityId = profile?.entity_id;
   if (!entityId) redirect("/unauthorized");
 
-  // Criar rascunho
+  // ✅ category_id é NOT NULL na tua BD -> escolher uma categoria ativa por defeito
+  const { data: defaultCat, error: catErr } = await supabase
+    .from("categories")
+    .select("id, name")
+    .eq("is_active", true)
+    .order("name")
+    .limit(1)
+    .maybeSingle();
+
+  if (catErr) redirect(`/entity?err=${encodeURIComponent(catErr.message)}`);
+  if (!defaultCat?.id) redirect(`/entity?err=${encodeURIComponent("Não existem categorias ativas. Cria uma categoria antes de criar pedidos.")}`);
+
   const object_title = "Novo pedido";
+
   const payload: InsertApp = {
     entity_id: entityId,
-    category_id: null,
+    category_id: defaultCat.id,
     object_title,
     object_normalized: normalizeTitle(object_title),
     requested_amount: null,
@@ -77,17 +80,12 @@ export default async function EntityNewApplicationPage() {
     is_deleted: false,
   };
 
-  const { data: created, error: insErr } = await supabase
-    .from("applications")
-    .insert(payload)
-    .select("id")
-    .single();
+  const { data: created, error: insErr } = await supabase.from("applications").insert(payload).select("id").single();
 
   if (insErr || !created?.id) {
     const msg = insErr?.message ?? "create_failed";
     redirect(`/entity?err=${encodeURIComponent(msg)}`);
   }
 
-  // Ir para o detalhe
   redirect(`/entity/applications/${created.id}`);
 }
