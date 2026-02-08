@@ -130,7 +130,7 @@ export default function ApplicationClient({
       body: JSON.stringify({
         category_id: categoryId || null,
         object_title: objectTitle,
-        requested_amount: requestedAmount ? Number(requestedAmount) : null,
+        requested_amount: requestedAmount ? Number(requestedAmount) : 0,
       }),
     });
 
