@@ -4,11 +4,17 @@ import { createClient } from "@/lib/supabase/server";
 
 const BodySchema = z.object({
   document_type_id: z.string().uuid(),
-  file_path: z.string().min(1),
+  file_path: z.string().min(1), // path no storage bucket
   original_name: z.string().min(1),
   mime_type: z.string().nullable().optional(),
   size_bytes: z.number().int().nullable().optional(),
 });
+
+function isColumnMissing(errMsg: string | undefined | null, col: string) {
+  if (!errMsg) return false;
+  const m = errMsg.toLowerCase();
+  return m.includes("column") && m.includes(col.toLowerCase());
+}
 
 export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string }> }) {
   const { id: applicationId } = await ctx.params;
@@ -59,16 +65,13 @@ export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string
     return NextResponse.json({ ok: false, error: "Upload fechado: pedido não está numa fase aberta." }, { status: 409 });
   }
 
-  // IMPORTANT: documents.owner_type é NOT NULL no teu schema
-  // Para documentos da candidatura, o "dono" é o próprio pedido.
-  const row: any = {
+  // Base row (vamos adicionar storage_path / owner_id de forma compatível)
+  const base: any = {
     owner_type: "APPLICATION",
-    owner_id: applicationId, // se a coluna existir (se não existir, o Supabase ignora? NÃO. Por isso tratamos abaixo.)
     scope: "APPLICATION",
     entity_id: entityId,
     application_id: applicationId,
     document_type_id: parsed.data.document_type_id,
-    file_path: parsed.data.file_path,
     original_name: parsed.data.original_name,
     mime_type: parsed.data.mime_type ?? null,
     size_bytes: parsed.data.size_bytes ?? null,
@@ -76,13 +79,31 @@ export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string
     uploaded_by: user.id,
   };
 
-  // Se o teu schema não tiver owner_id, vai rebentar por coluna inexistente.
-  // Então: tentamos inserir com owner_id; se der erro "column does not exist", reinserimos sem owner_id.
-  let ins = await supabase.from("documents").insert(row);
+  // paths: algumas versões usam storage_path, outras file_path
+  const withStoragePath = { ...base, storage_path: parsed.data.file_path };
+  const withFilePath = { ...base, file_path: parsed.data.file_path };
 
-  if (ins.error && ins.error.message?.toLowerCase().includes("column") && ins.error.message?.toLowerCase().includes("owner_id")) {
-    delete row.owner_id;
-    ins = await supabase.from("documents").insert(row);
+  // owner_id opcional (se existir)
+  withStoragePath.owner_id = applicationId;
+  withFilePath.owner_id = applicationId;
+
+  // 1) tenta com storage_path
+  let ins = await supabase.from("documents").insert(withStoragePath);
+
+  // se falhar porque não existe owner_id, tenta sem owner_id
+  if (ins.error && isColumnMissing(ins.error.message, "owner_id")) {
+    delete withStoragePath.owner_id;
+    ins = await supabase.from("documents").insert(withStoragePath);
+  }
+
+  // se falhar porque não existe storage_path, tenta file_path
+  if (ins.error && isColumnMissing(ins.error.message, "storage_path")) {
+    ins = await supabase.from("documents").insert(withFilePath);
+
+    if (ins.error && isColumnMissing(ins.error.message, "owner_id")) {
+      delete withFilePath.owner_id;
+      ins = await supabase.from("documents").insert(withFilePath);
+    }
   }
 
   if (ins.error) {
