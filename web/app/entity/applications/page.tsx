@@ -8,7 +8,7 @@ async function isEntityUser() {
   return data === true;
 }
 
-export default async function EntityHomePage() {
+export default async function EntityApplicationsPage() {
   if (!(await isEntityUser())) redirect("/unauthorized");
 
   const supabase = await createClient();
@@ -41,71 +41,67 @@ export default async function EntityHomePage() {
     .eq("entity_id", entityId)
     .eq("is_deleted", false)
     .order("created_at", { ascending: false })
-    .limit(50);
+    .limit(500);
 
   return (
     <div className="p-6 space-y-6">
       <header className="flex items-center justify-between">
         <div>
-          <h1 className="text-xl font-semibold">Área da Entidade</h1>
-          <p className="text-sm text-neutral-600">Pedidos e candidaturas</p>
+          <h1 className="text-xl font-semibold">Pedidos</h1>
+          <p className="text-sm text-neutral-600">Todos os pedidos da entidade</p>
         </div>
 
-        <form
-          action={async () => {
-            "use server";
-            const supabase = await createClient();
+        <div className="flex gap-3">
+          <Link className="rounded-md border px-3 py-2 text-sm" href="/entity">
+            Voltar
+          </Link>
 
-            const {
-              data: { user },
-            } = await supabase.auth.getUser();
-            if (!user) redirect("/login");
+          <form
+            action={async () => {
+              "use server";
+              const supabase = await createClient();
 
-            const { data: profile } = await supabase
-              .from("profiles")
-              .select("entity_id")
-              .eq("id", user.id)
-              .single();
+              const {
+                data: { user },
+              } = await supabase.auth.getUser();
+              if (!user) redirect("/login");
 
-            const entityId = profile?.entity_id;
-            if (!entityId) redirect("/unauthorized");
+              const { data: profile } = await supabase
+                .from("profiles")
+                .select("entity_id")
+                .eq("id", user.id)
+                .single();
 
-            // cria logo um rascunho para existir ID (necessário para anexos)
-            const ins = await supabase
-              .from("applications")
-              .insert({
-                entity_id: entityId,
-                category_id: defaultCategoryId,
-                object_title: "Novo pedido",
-                requested_amount: 0,
-                current_status: "S1_DRAFT",
-                origin: "SPONTANEOUS",
-              })
-              .select("id")
-              .single();
+              const entityId = profile?.entity_id;
+              if (!entityId) redirect("/unauthorized");
 
-            if (ins.error || !ins.data?.id) {
-              redirect("/entity?err=create_failed");
-            }
+              const ins = await supabase
+                .from("applications")
+                .insert({
+                  entity_id: entityId,
+                  category_id: defaultCategoryId,
+                  object_title: "Novo pedido",
+                  requested_amount: 0,
+                  current_status: "S1_DRAFT",
+                  origin: "SPONTANEOUS",
+                })
+                .select("id")
+                .single();
 
-            redirect(`/entity/applications/${ins.data.id}`);
-          }}
-        >
-          <button className="rounded-md bg-black px-3 py-2 text-sm text-white">
-            + Novo pedido
-          </button>
-        </form>
+              if (ins.error || !ins.data?.id) redirect("/entity/applications?err=create_failed");
+
+              redirect(`/entity/applications/${ins.data.id}`);
+            }}
+          >
+            <button className="rounded-md bg-black px-3 py-2 text-sm text-white">
+              + Novo pedido
+            </button>
+          </form>
+        </div>
       </header>
 
       <section className="rounded-2xl border p-4 shadow-sm">
-        <div className="flex items-center justify-between">
-          <h2 className="font-medium">Pedidos (últimos 50)</h2>
-          <Link className="text-sm underline" href="/entity/applications">
-            Ver todos
-          </Link>
-        </div>
-
-        <div className="mt-4 overflow-auto">
+        <div className="overflow-auto">
           <table className="min-w-[900px] w-full text-sm">
             <thead>
               <tr className="text-left border-b">
@@ -141,10 +137,6 @@ export default async function EntityHomePage() {
             </tbody>
           </table>
         </div>
-
-        <p className="mt-4 text-xs text-neutral-600">
-          Nota: para anexar documentos, o pedido tem de existir (rascunho). Por isso o “Novo pedido” cria sempre um rascunho.
-        </p>
       </section>
     </div>
   );
