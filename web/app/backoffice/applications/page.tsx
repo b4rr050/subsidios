@@ -8,8 +8,10 @@ type ApplicationRow = {
   requested_amount: number | null;
   current_status: string;
   created_at: string | null;
-  entities?: { name: string; nif: string } | null;
-  categories?: { name: string } | null;
+
+  // Supabase embedded relations frequentemente vêm como array
+  entities?: { name: string; nif: string }[] | null;
+  categories?: { name: string }[] | null;
 };
 
 async function isTechOrAdmin() {
@@ -17,6 +19,10 @@ async function isTechOrAdmin() {
   const a = await supabase.rpc("has_role", { role: "ADMIN" });
   const t = await supabase.rpc("has_role", { role: "TECH" });
   return a.data === true || t.data === true;
+}
+
+function first<T>(v: T[] | null | undefined): T | null {
+  return Array.isArray(v) && v.length > 0 ? v[0] : null;
 }
 
 export default async function BackofficeApplicationsPage() {
@@ -50,7 +56,7 @@ export default async function BackofficeApplicationsPage() {
     );
   }
 
-  const rows = (apps ?? []) as ApplicationRow[];
+  const rows = (apps ?? []) as unknown as ApplicationRow[];
 
   return (
     <div className="p-6 space-y-6">
@@ -87,21 +93,28 @@ export default async function BackofficeApplicationsPage() {
               </tr>
             </thead>
             <tbody>
-              {rows.map((a) => (
-                <tr key={a.id} className="border-b">
-                  <td className="py-2">{a.entities?.name ?? "-"}</td>
-                  <td className="py-2">{a.entities?.nif ?? "-"}</td>
-                  <td className="py-2">{a.categories?.name ?? "-"}</td>
-                  <td className="py-2">
-                    <Link className="underline" href={`/backoffice/applications/${a.id}`}>
-                      {a.object_title}
-                    </Link>
-                  </td>
-                  <td className="py-2">{Number(a.requested_amount ?? 0).toFixed(2)} €</td>
-                  <td className="py-2">{a.current_status}</td>
-                  <td className="py-2">{a.created_at ? new Date(a.created_at).toLocaleString() : "-"}</td>
-                </tr>
-              ))}
+              {rows.map((a) => {
+                const ent = first(a.entities);
+                const cat = first(a.categories);
+
+                return (
+                  <tr key={a.id} className="border-b">
+                    <td className="py-2">{ent?.name ?? "-"}</td>
+                    <td className="py-2">{ent?.nif ?? "-"}</td>
+                    <td className="py-2">{cat?.name ?? "-"}</td>
+                    <td className="py-2">
+                      <Link className="underline" href={`/backoffice/applications/${a.id}`}>
+                        {a.object_title}
+                      </Link>
+                    </td>
+                    <td className="py-2">{Number(a.requested_amount ?? 0).toFixed(2)} €</td>
+                    <td className="py-2">{a.current_status}</td>
+                    <td className="py-2">
+                      {a.created_at ? new Date(a.created_at).toLocaleString() : "-"}
+                    </td>
+                  </tr>
+                );
+              })}
 
               {rows.length === 0 && (
                 <tr>
