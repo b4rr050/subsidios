@@ -1,10 +1,19 @@
-import { NextRequest, NextResponse } from "next/server";
+import { NextResponse } from "next/server";
 import { createClient } from "@/lib/supabase/server";
 
-export async function POST(_req: NextRequest) {
+function redirectToLogin(req: Request) {
+  return NextResponse.redirect(new URL("/login", req.url), { status: 303 });
+}
+
+export async function POST(req: Request) {
   const supabase = await createClient();
   await supabase.auth.signOut();
+  return redirectToLogin(req);
+}
 
-  // redireciona para login (client vai seguir)
-  return NextResponse.json({ ok: true });
+// Se alguém abrir /api/auth/logout no browser (GET), também redireciona para login
+export async function GET(req: Request) {
+  const supabase = await createClient();
+  await supabase.auth.signOut();
+  return redirectToLogin(req);
 }
