@@ -1,6 +1,7 @@
 import Link from "next/link";
 import { redirect } from "next/navigation";
 import { createClient } from "@/lib/supabase/server";
+import LogoutButton from "@/components/LogoutButton";
 
 async function isEntityUser() {
   const supabase = await createClient();
@@ -45,56 +46,60 @@ export default async function EntityHomePage() {
 
   return (
     <div className="p-6 space-y-6">
-      <header className="flex items-center justify-between">
+      <header className="flex items-center justify-between gap-4">
         <div>
           <h1 className="text-xl font-semibold">Área da Entidade</h1>
           <p className="text-sm text-neutral-600">Pedidos e candidaturas</p>
+          <p className="text-xs text-neutral-500">{user.email}</p>
         </div>
 
-        <form
-          action={async () => {
-            "use server";
-            const supabase = await createClient();
+        <div className="flex items-center gap-3">
+          <LogoutButton />
 
-            const {
-              data: { user },
-            } = await supabase.auth.getUser();
-            if (!user) redirect("/login");
+          <form
+            action={async () => {
+              "use server";
+              const supabase = await createClient();
 
-            const { data: profile } = await supabase
-              .from("profiles")
-              .select("entity_id")
-              .eq("id", user.id)
-              .single();
+              const {
+                data: { user },
+              } = await supabase.auth.getUser();
+              if (!user) redirect("/login");
 
-            const entityId = profile?.entity_id;
-            if (!entityId) redirect("/unauthorized");
+              const { data: profile } = await supabase
+                .from("profiles")
+                .select("entity_id")
+                .eq("id", user.id)
+                .single();
 
-            // cria logo um rascunho para existir ID (necessário para anexos)
-            const ins = await supabase
-              .from("applications")
-              .insert({
-                entity_id: entityId,
-                category_id: defaultCategoryId,
-                object_title: "Novo pedido",
-                requested_amount: 0,
-                current_status: "S1_DRAFT",
-                origin: "SPONTANEOUS",
-              })
-              .select("id")
-              .single();
+              const entityId = profile?.entity_id;
+              if (!entityId) redirect("/unauthorized");
 
-            if (ins.error || !ins.data?.id) {
-              redirect("/entity?err=create_failed");
-            }
+              const ins = await supabase
+                .from("applications")
+                .insert({
+                  entity_id: entityId,
+                  category_id: defaultCategoryId,
+                  object_title: "Novo pedido",
+                  requested_amount: 0,
+                  current_status: "S1_DRAFT",
+                  origin: "SPONTANEOUS",
+                })
+                .select("id")
+                .single();
 
-            redirect(`/entity/applications/${ins.data.id}`);
-          }}
-        >
-          <button className="rounded-md bg-black px-3 py-2 text-sm text-white">
-            + Novo pedido
-          </button>
-        </form>
+              if (ins.error || !ins.data?.id) {
+                redirect("/entity?err=create_failed");
+              }
+
+              redirect(`/entity/applications/${ins.data.id}`);
+            }}
+          >
+            <button className="rounded-md bg-black px-3 py-2 text-sm text-white">
+              + Novo pedido
+            </button>
+          </form>
+        </div>
       </header>
 
       <section className="rounded-2xl border p-4 shadow-sm">
