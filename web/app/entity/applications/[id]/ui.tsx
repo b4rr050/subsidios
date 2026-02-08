@@ -16,7 +16,8 @@ type DocType = {
 type DocRow = {
   id: string;
   document_type_id: string;
-  file_path: string;
+  storage_path?: string | null;
+  file_path?: string | null;
   original_name: string;
   mime_type: string | null;
   size_bytes: number | null;
@@ -24,6 +25,7 @@ type DocRow = {
   uploaded_at: string;
   review_comment: string | null;
 };
+
 
 type App = {
   id: string;
@@ -131,14 +133,21 @@ export default function ApplicationClient({
     router.refresh();
   }
 
-  async function openDoc(path: string) {
-    const { data, error } = await supabase.storage.from("docs").createSignedUrl(path, 60);
-    if (error || !data?.signedUrl) {
-      setDocMsg("Erro a gerar link para abrir documento.");
-      return;
-    }
-    window.open(data.signedUrl, "_blank", "noopener,noreferrer");
+  async function openDoc(d: DocRow) {
+  const path = d.storage_path ?? d.file_path ?? null;
+  if (!path) {
+    setDocMsg("Documento sem path (storage_path/file_path). Contacta o admin.");
+    return;
   }
+
+  const { data, error } = await supabase.storage.from("docs").createSignedUrl(path, 60);
+  if (error || !data?.signedUrl) {
+    setDocMsg(error?.message ?? "Erro a gerar link para abrir documento.");
+    return;
+  }
+  window.open(data.signedUrl, "_blank", "noopener,noreferrer");
+}
+
 
   async function uploadDocument(e: React.FormEvent) {
     e.preventDefault();
@@ -353,7 +362,7 @@ export default function ApplicationClient({
                   <td className="py-2">{d.review_comment ?? "-"}</td>
                   <td className="py-2">{d.uploaded_at ? new Date(d.uploaded_at).toLocaleString() : "-"}</td>
                   <td className="py-2">
-                    <button className="underline" type="button" onClick={() => openDoc(d.file_path)}>
+                    <button className="underline" type="button" onClick={() => openDoc(d)}>
                       Abrir
                     </button>
                   </td>

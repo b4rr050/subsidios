@@ -61,7 +61,6 @@ export default async function EntityApplicationDetailPage({ params }: { params: 
     .order("changed_at", { ascending: false })
     .limit(50);
 
-  // Buscar TODOS os tipos ativos e filtrar localmente (para debug)
   const { data: allDocTypes, error: docTypesErr } = await supabase
     .from("document_types")
     .select("id, name, scope, is_active")
@@ -71,9 +70,10 @@ export default async function EntityApplicationDetailPage({ params }: { params: 
   const documentTypes =
     (allDocTypes ?? []).filter((d) => String(d.scope).trim().toUpperCase() === "APPLICATION") ?? [];
 
+  // ✅ IMPORTANTE: ler storage_path (porque no teu schema é NOT NULL)
   const { data: documents } = await supabase
     .from("documents")
-    .select("id, document_type_id, file_path, original_name, mime_type, size_bytes, status, uploaded_at, review_comment")
+    .select("id, document_type_id, storage_path, file_path, original_name, mime_type, size_bytes, status, uploaded_at, review_comment")
     .eq("application_id", app.id)
     .eq("is_deleted", false)
     .order("uploaded_at", { ascending: false })
@@ -93,12 +93,12 @@ export default async function EntityApplicationDetailPage({ params }: { params: 
       </header>
 
       <ApplicationClient
-        application={app}
+        application={app as any}
         categories={categories ?? []}
         history={history ?? []}
         entityId={entityId}
         documentTypes={documentTypes as any}
-        documents={documents ?? []}
+        documents={(documents ?? []) as any}
         debugDocTypes={{
           totalActive: allDocTypes?.length ?? 0,
           applicationActive: documentTypes.length,
