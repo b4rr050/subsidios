@@ -56,10 +56,10 @@ export default function ApplicationClient({
   application,
   categories,
   history,
-  entityId,
+  entityId, // recebido do page.tsx, mas não mostramos no UI
   documentTypes,
   documents,
-  debugDocTypes,
+  debugDocTypes, // recebido do page.tsx, mas não mostramos no UI
 }: {
   application: App;
   categories: Category[];
@@ -187,7 +187,6 @@ export default function ApplicationClient({
 
     setLoading(true);
 
-    // Upload ao storage
     const safeName = file.name.replace(/[^\w.\-() ]+/g, "_");
     const storagePath = `applications/${application.id}/${Date.now()}_${safeName}`;
 
@@ -203,7 +202,6 @@ export default function ApplicationClient({
       return;
     }
 
-    // Registo na tabela documents
     const res = await fetch(`/api/entity/applications/${application.id}/documents/create`, {
       method: "POST",
       headers: { "content-type": "application/json" },
@@ -233,7 +231,7 @@ export default function ApplicationClient({
   async function onDeleteDraft() {
     if (!canDeleteDraft) return;
 
-    const ok1 = window.confirm("Eliminar este pedido em rascunho? (a entidade deixa de o ver)");
+    const ok1 = window.confirm("Eliminar este pedido em rascunho?");
     if (!ok1) return;
 
     const ok2 = window.confirm("Confirma: queres mesmo ELIMINAR este rascunho?");
@@ -261,20 +259,17 @@ export default function ApplicationClient({
 
   return (
     <div className="space-y-6">
-      {/* Pedido */}
+      {/* Resumo (limpo) */}
       <section className="rounded-2xl border p-4 shadow-sm">
         <div className="flex items-start justify-between gap-4">
           <div className="space-y-1">
-            <h2 className="font-medium">Pedido</h2>
-            <p className="text-xs text-neutral-500">
-              ID: {application.id} • Origem: {application.origin ?? "-"}
-            </p>
-            <p className="text-xs text-neutral-500">
-              Criado: {application.created_at ? new Date(application.created_at).toLocaleString() : "-"} • Atualizado:{" "}
+            <h2 className="font-medium">Dados do pedido</h2>
+            <p className="text-sm text-neutral-900">{application.object_title}</p>
+            <p className="text-xs text-neutral-600">
+              Origem: {application.origin ?? "-"} • Criado:{" "}
+              {application.created_at ? new Date(application.created_at).toLocaleString() : "-"} • Atualizado:{" "}
               {application.updated_at ? new Date(application.updated_at).toLocaleString() : "-"}
             </p>
-            {/* entityId só para consistência/debug (não precisa de aparecer muito) */}
-            <p className="text-[11px] text-neutral-400">Entidade: {entityId}</p>
           </div>
 
           <span className="text-sm rounded-md border px-2 py-1">{status}</span>
@@ -310,7 +305,7 @@ export default function ApplicationClient({
           </div>
 
           <div className="space-y-1">
-            <label className="text-sm">Valor solicitado</label>
+            <label className="text-sm">Valor solicitado (€)</label>
             <input
               className="w-full rounded-md border px-3 py-2"
               value={requestedAmount}
@@ -355,12 +350,6 @@ export default function ApplicationClient({
 
           {msg && <p className="text-sm mt-2">{msg}</p>}
         </form>
-
-        {/* Debug dos doc types (discreto) */}
-        <p className="mt-3 text-xs text-neutral-500">
-          Tipos ativos: {debugDocTypes.applicationActive} | APPLICATION: {debugDocTypes.applicationActive}
-          {debugDocTypes.error ? ` | Erro: ${debugDocTypes.error}` : ""}
-        </p>
       </section>
 
       {/* Documentos */}
@@ -442,7 +431,7 @@ export default function ApplicationClient({
         </div>
       </section>
 
-      {/* Histórico de estados */}
+      {/* Histórico */}
       <section className="rounded-2xl border p-4 shadow-sm">
         <h2 className="font-medium mb-3">Histórico de estados</h2>
         <div className="overflow-auto">
