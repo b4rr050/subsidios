@@ -1,21 +1,46 @@
 "use client";
 
-import { useState } from "react";
+import { useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
+import { createClient } from "@/lib/supabase/client";
+
+type Doc = {
+  id: string;
+  scope: "ENTITY" | "APPLICATION" | "EXPENSE";
+  document_type_id: string;
+  original_name: string;
+  file_path: string;
+  status: "PENDING" | "APPROVED" | "REJECTED";
+  uploaded_at: string;
+  review_comment: string | null;
+};
+
+type DocType = { id: string; name: string; scope: string };
 
 export default function BackofficeAppClient({
   app,
   statusHistory,
   changeLog,
+  documents,
+  documentTypes,
 }: {
   app: any;
   statusHistory: any[];
   changeLog: any[];
+  documents: Doc[];
+  documentTypes: DocType[];
 }) {
   const router = useRouter();
+  const supabase = createClient();
+
   const [loading, setLoading] = useState(false);
   const [msg, setMsg] = useState<string | null>(null);
   const [comment, setComment] = useState("");
+
+  const docTypeName = useMemo(() => {
+    const map = new Map(documentTypes.map((d) => [d.id, d.name]));
+    return (id: string) => map.get(id) ?? id;
+  }, [documentTypes]);
 
   async function call(action: "assume" | "validate" | "return" | "reopen") {
     setMsg(null);
@@ -36,6 +61,38 @@ export default function BackofficeAppClient({
     }
 
     setMsg("OK.");
+    setComment("");
+    router.refresh();
+  }
+
+  async function openDoc(path: string) {
+    const { data, error } = await supabase.storage.from("docs").createSignedUrl(path, 60);
+    if (error || !data?.signedUrl) {
+      setMsg("Erro a gerar link para abrir documento.");
+      return;
+    }
+    window.open(data.signedUrl, "_blank", "noopener,noreferrer");
+  }
+
+  async function reviewDoc(docId: string, decision: "APPROVED" | "REJECTED") {
+    setMsg(null);
+    setLoading(true);
+
+    const res = await fetch(`/api/backoffice/documents/${docId}/review`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ decision, comment }),
+    });
+
+    const data = await res.json().catch(() => ({}));
+    setLoading(false);
+
+    if (!res.ok || data?.ok !== true) {
+      setMsg(data?.error ?? "Erro a rever documento");
+      return;
+    }
+
+    setMsg("Documento revisto.");
     setComment("");
     router.refresh();
   }
@@ -65,7 +122,7 @@ export default function BackofficeAppClient({
             value={comment}
             onChange={(e) => setComment(e.target.value)}
             rows={3}
-            placeholder="Ex.: Falta documento X / Validado tecnicamente / Reabertura autorizada..."
+            placeholder="Usado nas ações e/ou na revisão de documentos."
             disabled={loading}
           />
         </div>
@@ -73,37 +130,75 @@ export default function BackofficeAppClient({
         {msg && <p className="mt-3 text-sm">{msg}</p>}
 
         <div className="mt-4 flex flex-wrap gap-3">
-          <button
-            className="rounded-md border px-3 py-2 text-sm disabled:opacity-60"
-            disabled={loading}
-            onClick={() => call("assume")}
-          >
+          <button className="rounded-md border px-3 py-2 text-sm disabled:opacity-60" disabled={loading} onClick={() => call("assume")}>
             Assumir (S2→S3)
           </button>
-
-          <button
-            className="rounded-md bg-black px-3 py-2 text-sm text-white disabled:opacity-60"
-            disabled={loading}
-            onClick={() => call("validate")}
-          >
+          <button className="rounded-md bg-black px-3 py-2 text-sm text-white disabled:opacity-60" disabled={loading} onClick={() => call("validate")}>
             Validar (→S5)
           </button>
-
-          <button
-            className="rounded-md border px-3 py-2 text-sm disabled:opacity-60"
-            disabled={loading}
-            onClick={() => call("return")}
-          >
-            Devolver à entidade (→S4)
+          <button className="rounded-md border px-3 py-2 text-sm disabled:opacity-60" disabled={loading} onClick={() => call("return")}>
+            Devolver (→S4)
           </button>
-
-          <button
-            className="rounded-md border px-3 py-2 text-sm disabled:opacity-60"
-            disabled={loading}
-            onClick={() => call("reopen")}
-          >
+          <button className="rounded-md border px-3 py-2 text-sm disabled:opacity-60" disabled={loading} onClick={() => call("reopen")}>
             Reabrir (S5→S4)
           </button>
+        </div>
+      </section>
+
+      {/* DOCUMENTOS */}
+      <section className="rounded-2xl border p-4 shadow-sm">
+        <h2 className="font-medium mb-3">Documentos</h2>
+
+        <div className="overflow-auto">
+          <table className="min-w-[1100px] w-full text-sm">
+            <thead>
+              <tr className="text-left border-b">
+                <th className="py-2">Tipo</th>
+                <th className="py-2">Nome</th>
+                <th className="py-2">Estado</th>
+                <th className="py-2">Comentário</th>
+                <th className="py-2">Data</th>
+                <th className="py-2">Ações</th>
+              </tr>
+            </thead>
+            <tbody>
+              {documents.map((d) => (
+                <tr key={d.id} className="border-b">
+                  <td className="py-2">{docTypeName(d.document_type_id)}</td>
+                  <td className="py-2">
+                    <button className="underline" type="button" onClick={() => openDoc(d.file_path)}>
+                      {d.original_name}
+                    </button>
+                  </td>
+                  <td className="py-2">{d.status}</td>
+                  <td className="py-2">{d.review_comment ?? "-"}</td>
+                  <td className="py-2">{d.uploaded_at ? new Date(d.uploaded_at).toLocaleString() : "-"}</td>
+                  <td className="py-2">
+                    {d.status === "PENDING" ? (
+                      <div className="flex gap-3">
+                        <button className="underline" type="button" disabled={loading} onClick={() => reviewDoc(d.id, "APPROVED")}>
+                          Aprovar
+                        </button>
+                        <button className="underline" type="button" disabled={loading} onClick={() => reviewDoc(d.id, "REJECTED")}>
+                          Rejeitar
+                        </button>
+                      </div>
+                    ) : (
+                      <span className="text-neutral-600">—</span>
+                    )}
+                  </td>
+                </tr>
+              ))}
+
+              {documents.length === 0 && (
+                <tr>
+                  <td className="py-3 text-neutral-600" colSpan={6}>
+                    Sem documentos.
+                  </td>
+                </tr>
+              )}
+            </tbody>
+          </table>
         </div>
       </section>
 
@@ -158,7 +253,7 @@ export default function BackofficeAppClient({
                 </tr>
               ))}
               {changeLog.length === 0 && (
-                <tr><td className="py-3 text-neutral-600" colSpan={4}>Sem alterações registadas.</td></tr>
+                <tr><td className="py-3 text-neutral-600" colSpan={4}>Sem alterações.</td></tr>
               )}
             </tbody>
           </table>

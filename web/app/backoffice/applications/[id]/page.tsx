@@ -19,7 +19,6 @@ export default async function BackofficeApplicationDetailPage({
   if (!(await isTechOrAdmin())) redirect("/unauthorized");
 
   const { id: appId } = await params;
-
   const supabase = await createClient();
 
   const { data: app, error } = await supabase
@@ -66,6 +65,20 @@ export default async function BackofficeApplicationDetailPage({
     .order("changed_at", { ascending: false })
     .limit(200);
 
+  const { data: docTypes } = await supabase
+    .from("document_types")
+    .select("id, name, scope")
+    .eq("is_active", true)
+    .order("name");
+
+  const { data: docs } = await supabase
+    .from("documents")
+    .select("id, scope, document_type_id, original_name, file_path, status, uploaded_at, review_comment")
+    .eq("application_id", appId)
+    .eq("is_deleted", false)
+    .order("uploaded_at", { ascending: false })
+    .limit(200);
+
   return (
     <div className="p-6 space-y-6">
       <header className="flex items-center justify-between">
@@ -78,7 +91,13 @@ export default async function BackofficeApplicationDetailPage({
         </a>
       </header>
 
-      <BackofficeAppClient app={app} statusHistory={statusHistory ?? []} changeLog={changeLog ?? []} />
+      <BackofficeAppClient
+        app={app}
+        statusHistory={statusHistory ?? []}
+        changeLog={changeLog ?? []}
+        documents={docs ?? []}
+        documentTypes={docTypes ?? []}
+      />
     </div>
   );
 }
