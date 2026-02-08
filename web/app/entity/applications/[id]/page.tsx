@@ -2,6 +2,8 @@ import { redirect } from "next/navigation";
 import { createClient } from "@/lib/supabase/server";
 import ApplicationClient from "./ui";
 
+type ParamsPromise = Promise<{ id: string }>;
+
 async function isEntityUser() {
   const supabase = await createClient();
   const { data } = await supabase.rpc("has_role", { role: "ENTITY" });
@@ -11,15 +13,19 @@ async function isEntityUser() {
 export default async function EntityApplicationDetailPage({
   params,
 }: {
-  params: { id: string };
+  params: ParamsPromise;
 }) {
   if (!(await isEntityUser())) redirect("/unauthorized");
+
+  // ✅ Next 15: params pode ser Promise
+  const { id: appId } = await params;
 
   const supabase = await createClient();
 
   const { data: userData } = await supabase.auth.getUser();
   if (!userData.user) redirect("/login");
 
+  // entity_id do utilizador
   const { data: profile, error: profErr } = await supabase
     .from("profiles")
     .select("entity_id")
@@ -29,11 +35,12 @@ export default async function EntityApplicationDetailPage({
   const entityId = profile?.entity_id;
   if (profErr || !entityId) redirect("/unauthorized");
 
-  const appId = params.id;
-
+  // pedido
   const { data: app, error: appErr } = await supabase
     .from("applications")
-    .select("id, entity_id, category_id, object_title, requested_amount, current_status, created_at, updated_at, origin")
+    .select(
+      "id, entity_id, category_id, object_title, requested_amount, current_status, created_at, updated_at, origin"
+    )
     .eq("id", appId)
     .single();
 
@@ -43,13 +50,18 @@ export default async function EntityApplicationDetailPage({
         <h1 className="text-xl font-semibold">Pedido</h1>
         <p className="mt-2 text-sm text-red-600">Pedido não encontrado.</p>
         <div className="mt-3 text-xs text-neutral-600">
-          <p><b>ID pedido:</b> {appId}</p>
-          <p><b>Erro:</b> {appErr?.message ?? "sem erro (null)"} </p>
+          <p>
+            <b>ID pedido:</b> {String(appId)}
+          </p>
+          <p>
+            <b>Erro:</b> {appErr?.message ?? "sem erro (null)"}
+          </p>
         </div>
       </div>
     );
   }
 
+  // segurança extra
   if (app.entity_id !== entityId) redirect("/unauthorized");
 
   const { data: categories } = await supabase
@@ -77,7 +89,11 @@ export default async function EntityApplicationDetailPage({
         </a>
       </header>
 
-      <ApplicationClient application={app} categories={categories ?? []} history={history ?? []} />
+      <ApplicationClient
+        application={app}
+        categories={categories ?? []}
+        history={history ?? []}
+      />
     </div>
   );
 }
