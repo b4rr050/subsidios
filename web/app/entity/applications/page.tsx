@@ -1,6 +1,7 @@
 import Link from "next/link";
 import { redirect } from "next/navigation";
 import { createClient } from "@/lib/supabase/server";
+import LogoutButton from "@/components/LogoutButton";
 
 async function isEntityUser() {
   const supabase = await createClient();
@@ -27,14 +28,6 @@ export default async function EntityApplicationsPage() {
   const entityId = profile?.entity_id;
   if (!entityId) redirect("/unauthorized");
 
-  const { data: categories } = await supabase
-    .from("categories")
-    .select("id, name")
-    .eq("is_active", true)
-    .order("name");
-
-  const defaultCategoryId = categories?.[0]?.id ?? null;
-
   const { data: apps } = await supabase
     .from("applications")
     .select("id, object_title, requested_amount, current_status, created_at")
@@ -45,13 +38,16 @@ export default async function EntityApplicationsPage() {
 
   return (
     <div className="p-6 space-y-6">
-      <header className="flex items-center justify-between">
+      <header className="flex items-center justify-between gap-4">
         <div>
           <h1 className="text-xl font-semibold">Pedidos</h1>
           <p className="text-sm text-neutral-600">Todos os pedidos da entidade</p>
+          <p className="text-xs text-neutral-500">{user.email}</p>
         </div>
 
-        <div className="flex gap-3">
+        <div className="flex items-center gap-3">
+          <LogoutButton />
+
           <Link className="rounded-md border px-3 py-2 text-sm" href="/entity">
             Voltar
           </Link>
@@ -75,11 +71,24 @@ export default async function EntityApplicationsPage() {
               const entityId = profile?.entity_id;
               if (!entityId) redirect("/unauthorized");
 
+              // Buscar uma categoria ativa (para evitar NULL / constraint)
+              const { data: cat, error: catErr } = await supabase
+                .from("categories")
+                .select("id")
+                .eq("is_active", true)
+                .order("name")
+                .limit(1)
+                .single();
+
+              if (catErr || !cat?.id) {
+                redirect("/entity/applications?err=no_categories");
+              }
+
               const ins = await supabase
                 .from("applications")
                 .insert({
                   entity_id: entityId,
-                  category_id: defaultCategoryId,
+                  category_id: cat.id,
                   object_title: "Novo pedido",
                   requested_amount: 0,
                   current_status: "S1_DRAFT",
@@ -88,7 +97,10 @@ export default async function EntityApplicationsPage() {
                 .select("id")
                 .single();
 
-              if (ins.error || !ins.data?.id) redirect("/entity/applications?err=create_failed");
+              if (ins.error || !ins.data?.id) {
+                const msg = encodeURIComponent(ins.error?.message ?? "create_failed");
+                redirect(`/entity/applications?err=${msg}`);
+              }
 
               redirect(`/entity/applications/${ins.data.id}`);
             }}
@@ -121,9 +133,7 @@ export default async function EntityApplicationsPage() {
                   </td>
                   <td className="py-2">{Number(a.requested_amount ?? 0).toFixed(2)} €</td>
                   <td className="py-2">{a.current_status}</td>
-                  <td className="py-2">
-                    {a.created_at ? new Date(a.created_at).toLocaleString() : "-"}
-                  </td>
+                  <td className="py-2">{a.created_at ? new Date(a.created_at).toLocaleString() : "-"}</td>
                 </tr>
               ))}
 
