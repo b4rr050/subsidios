@@ -28,14 +28,6 @@ export default async function EntityHomePage() {
   const entityId = profile?.entity_id;
   if (!entityId) redirect("/unauthorized");
 
-  const { data: categories } = await supabase
-    .from("categories")
-    .select("id, name")
-    .eq("is_active", true)
-    .order("name");
-
-  const defaultCategoryId = categories?.[0]?.id ?? null;
-
   const { data: apps } = await supabase
     .from("applications")
     .select("id, object_title, requested_amount, current_status, created_at")
@@ -75,11 +67,24 @@ export default async function EntityHomePage() {
               const entityId = profile?.entity_id;
               if (!entityId) redirect("/unauthorized");
 
+              // Buscar uma categoria ativa (garantir não-null se a coluna for NOT NULL)
+              const { data: cat, error: catErr } = await supabase
+                .from("categories")
+                .select("id")
+                .eq("is_active", true)
+                .order("name")
+                .limit(1)
+                .single();
+
+              if (catErr || !cat?.id) {
+                redirect("/entity?err=no_categories");
+              }
+
               const ins = await supabase
                 .from("applications")
                 .insert({
                   entity_id: entityId,
-                  category_id: defaultCategoryId,
+                  category_id: cat.id,
                   object_title: "Novo pedido",
                   requested_amount: 0,
                   current_status: "S1_DRAFT",
@@ -89,7 +94,8 @@ export default async function EntityHomePage() {
                 .single();
 
               if (ins.error || !ins.data?.id) {
-                redirect("/entity?err=create_failed");
+                const msg = encodeURIComponent(ins.error?.message ?? "create_failed");
+                redirect(`/entity?err=${msg}`);
               }
 
               redirect(`/entity/applications/${ins.data.id}`);
@@ -130,9 +136,7 @@ export default async function EntityHomePage() {
                   </td>
                   <td className="py-2">{Number(a.requested_amount ?? 0).toFixed(2)} €</td>
                   <td className="py-2">{a.current_status}</td>
-                  <td className="py-2">
-                    {a.created_at ? new Date(a.created_at).toLocaleString() : "-"}
-                  </td>
+                  <td className="py-2">{a.created_at ? new Date(a.created_at).toLocaleString() : "-"}</td>
                 </tr>
               ))}
 
@@ -146,10 +150,6 @@ export default async function EntityHomePage() {
             </tbody>
           </table>
         </div>
-
-        <p className="mt-4 text-xs text-neutral-600">
-          Nota: para anexar documentos, o pedido tem de existir (rascunho). Por isso o “Novo pedido” cria sempre um rascunho.
-        </p>
       </section>
     </div>
   );
