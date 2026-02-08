@@ -5,7 +5,14 @@ import { useRouter } from "next/navigation";
 import { createClient } from "@/lib/supabase/client";
 
 type Category = { id: string; name: string };
-type DocType = { id: string; code: string; name: string; scope: string };
+
+type DocType = {
+  id: string;
+  name: string;
+  scope?: string | null;
+  is_active?: boolean | null;
+};
+
 type DocRow = {
   id: string;
   document_type_id: string;
@@ -42,7 +49,6 @@ function canSubmit(status: string) {
   return status === "S1_DRAFT" || status === "S4_RETURNED";
 }
 function canUploadDocs(status: string) {
-  // Docs candidatura: enquanto o pedido estiver numa fase ainda “aberta”
   return canEdit(status);
 }
 
@@ -53,6 +59,7 @@ export default function ApplicationClient({
   entityId,
   documentTypes,
   documents,
+  debugDocTypes,
 }: {
   application: App;
   categories: Category[];
@@ -60,6 +67,7 @@ export default function ApplicationClient({
   entityId: string;
   documentTypes: DocType[];
   documents: DocRow[];
+  debugDocTypes?: { totalActive: number; applicationActive: number; error: string | null };
 }) {
   const router = useRouter();
   const supabase = createClient();
@@ -260,9 +268,17 @@ export default function ApplicationClient({
         </form>
       </section>
 
-      {/* DOCUMENTOS (SEMPRE VISÍVEL) */}
+      {/* DOCUMENTOS */}
       <section className="rounded-2xl border p-4 shadow-sm">
         <h2 className="font-medium">Documentos (Candidatura)</h2>
+
+        {/* DEBUG */}
+        {debugDocTypes?.error && (
+          <p className="mt-2 text-xs text-red-600">Erro a carregar tipos: {debugDocTypes.error}</p>
+        )}
+        <p className="mt-2 text-xs text-neutral-600">
+          Tipos ativos: {debugDocTypes?.totalActive ?? "-"} | APPLICATION: {debugDocTypes?.applicationActive ?? "-"}
+        </p>
 
         <form onSubmit={uploadDocument} className="mt-4 grid gap-3 max-w-2xl">
           <div className="grid gap-2">
@@ -283,6 +299,12 @@ export default function ApplicationClient({
                 ))
               )}
             </select>
+
+            {documentTypes.length === 0 && (
+              <p className="text-xs text-red-600">
+                Não existem tipos de documento configurados (APPLICATION). Contacta o administrador.
+              </p>
+            )}
           </div>
 
           <div className="grid gap-2">

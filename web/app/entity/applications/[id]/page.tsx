@@ -10,11 +10,7 @@ async function isEntityUser() {
   return data === true;
 }
 
-export default async function EntityApplicationDetailPage({
-  params,
-}: {
-  params: ParamsPromise;
-}) {
+export default async function EntityApplicationDetailPage({ params }: { params: ParamsPromise }) {
   if (!(await isEntityUser())) redirect("/unauthorized");
 
   const { id: appId } = await params;
@@ -65,15 +61,16 @@ export default async function EntityApplicationDetailPage({
     .order("changed_at", { ascending: false })
     .limit(50);
 
-  // Tipos de documento para candidatura
-  const { data: documentTypes } = await supabase
+  // Buscar TODOS os tipos ativos e filtrar localmente (para debug)
+  const { data: allDocTypes, error: docTypesErr } = await supabase
     .from("document_types")
-    .select("id, code, name, scope")
-    .eq("scope", "APPLICATION")
+    .select("id, name, scope, is_active")
     .eq("is_active", true)
     .order("name");
 
-  // Documentos já anexados
+  const documentTypes =
+    (allDocTypes ?? []).filter((d) => String(d.scope).trim().toUpperCase() === "APPLICATION") ?? [];
+
   const { data: documents } = await supabase
     .from("documents")
     .select("id, document_type_id, file_path, original_name, mime_type, size_bytes, status, uploaded_at, review_comment")
@@ -100,8 +97,13 @@ export default async function EntityApplicationDetailPage({
         categories={categories ?? []}
         history={history ?? []}
         entityId={entityId}
-        documentTypes={documentTypes ?? []}
+        documentTypes={documentTypes as any}
         documents={documents ?? []}
+        debugDocTypes={{
+          totalActive: allDocTypes?.length ?? 0,
+          applicationActive: documentTypes.length,
+          error: docTypesErr?.message ?? null,
+        }}
       />
     </div>
   );
