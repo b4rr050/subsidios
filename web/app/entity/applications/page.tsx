@@ -9,6 +9,17 @@ async function isEntityUser() {
   return data === true;
 }
 
+function normalize(s: string) {
+  return s
+    .trim()
+    .toLowerCase()
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .replace(/\s+/g, " ")
+    .replace(/[^\w\s-]/g, "")
+    .trim();
+}
+
 export default async function EntityApplicationsPage() {
   if (!(await isEntityUser())) redirect("/unauthorized");
 
@@ -41,20 +52,27 @@ export default async function EntityApplicationsPage() {
       <header className="flex items-center justify-between gap-4">
         <div>
           <h1 className="text-xl font-semibold">Pedidos</h1>
-          <p className="text-sm text-neutral-600">Todos os pedidos da entidade</p>
+          <p className="text-sm text-neutral-600">
+            Todos os pedidos submetidos pela entidade
+          </p>
           <p className="text-xs text-neutral-500">{user.email}</p>
         </div>
 
         <div className="flex items-center gap-3">
           <LogoutButton />
 
-          <Link className="rounded-md border px-3 py-2 text-sm" href="/entity">
+          <Link
+            href="/entity"
+            className="rounded-md border px-3 py-2 text-sm"
+          >
             Voltar
           </Link>
 
+          {/* CRIAR NOVO PEDIDO (rascunho seguro) */}
           <form
             action={async () => {
               "use server";
+
               const supabase = await createClient();
 
               const {
@@ -71,7 +89,7 @@ export default async function EntityApplicationsPage() {
               const entityId = profile?.entity_id;
               if (!entityId) redirect("/unauthorized");
 
-              // Buscar uma categoria ativa (para evitar NULL / constraint)
+              // Buscar categoria ativa (evita NULLs)
               const { data: cat, error: catErr } = await supabase
                 .from("categories")
                 .select("id")
@@ -84,12 +102,15 @@ export default async function EntityApplicationsPage() {
                 redirect("/entity/applications?err=no_categories");
               }
 
+              const title = "Novo pedido";
+
               const ins = await supabase
                 .from("applications")
                 .insert({
                   entity_id: entityId,
                   category_id: cat.id,
-                  object_title: "Novo pedido",
+                  object_title: title,
+                  object_normalized: normalize(title),
                   requested_amount: 0,
                   current_status: "S1_DRAFT",
                   origin: "SPONTANEOUS",
@@ -98,7 +119,9 @@ export default async function EntityApplicationsPage() {
                 .single();
 
               if (ins.error || !ins.data?.id) {
-                const msg = encodeURIComponent(ins.error?.message ?? "create_failed");
+                const msg = encodeURIComponent(
+                  ins.error?.message ?? "create_failed"
+                );
                 redirect(`/entity/applications?err=${msg}`);
               }
 
@@ -127,19 +150,31 @@ export default async function EntityApplicationsPage() {
               {(apps ?? []).map((a) => (
                 <tr key={a.id} className="border-b">
                   <td className="py-2">
-                    <Link className="underline" href={`/entity/applications/${a.id}`}>
+                    <Link
+                      href={`/entity/applications/${a.id}`}
+                      className="underline"
+                    >
                       {a.object_title}
                     </Link>
                   </td>
-                  <td className="py-2">{Number(a.requested_amount ?? 0).toFixed(2)} €</td>
+                  <td className="py-2">
+                    {Number(a.requested_amount ?? 0).toFixed(2)} €
+                  </td>
                   <td className="py-2">{a.current_status}</td>
-                  <td className="py-2">{a.created_at ? new Date(a.created_at).toLocaleString() : "-"}</td>
+                  <td className="py-2">
+                    {a.created_at
+                      ? new Date(a.created_at).toLocaleString()
+                      : "-"}
+                  </td>
                 </tr>
               ))}
 
               {(apps?.length ?? 0) === 0 && (
                 <tr>
-                  <td className="py-3 text-neutral-600" colSpan={4}>
+                  <td
+                    colSpan={4}
+                    className="py-3 text-center text-neutral-600"
+                  >
                     Ainda não existem pedidos.
                   </td>
                 </tr>

@@ -28,7 +28,6 @@ export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string
   const parsed = BodySchema.safeParse(json);
   if (!parsed.success) return NextResponse.json({ ok: false, error: "Invalid payload" }, { status: 400 });
 
-  // Qual é a entidade deste utilizador?
   const { data: profile, error: profErr } = await supabase
     .from("profiles")
     .select("entity_id")
@@ -41,7 +40,6 @@ export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string
 
   const entityId = profile.entity_id;
 
-  // Garantir que o pedido pertence à entidade e está numa fase onde aceita docs
   const { data: app, error: appErr } = await supabase
     .from("applications")
     .select("id, entity_id, current_status, is_deleted")
@@ -61,8 +59,11 @@ export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string
     return NextResponse.json({ ok: false, error: "Upload fechado: pedido não está numa fase aberta." }, { status: 409 });
   }
 
-  // Inserir registo em documents
-  const ins = await supabase.from("documents").insert({
+  // IMPORTANT: documents.owner_type é NOT NULL no teu schema
+  // Para documentos da candidatura, o "dono" é o próprio pedido.
+  const row: any = {
+    owner_type: "APPLICATION",
+    owner_id: applicationId, // se a coluna existir (se não existir, o Supabase ignora? NÃO. Por isso tratamos abaixo.)
     scope: "APPLICATION",
     entity_id: entityId,
     application_id: applicationId,
@@ -73,7 +74,16 @@ export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string
     size_bytes: parsed.data.size_bytes ?? null,
     status: "PENDING",
     uploaded_by: user.id,
-  });
+  };
+
+  // Se o teu schema não tiver owner_id, vai rebentar por coluna inexistente.
+  // Então: tentamos inserir com owner_id; se der erro "column does not exist", reinserimos sem owner_id.
+  let ins = await supabase.from("documents").insert(row);
+
+  if (ins.error && ins.error.message?.toLowerCase().includes("column") && ins.error.message?.toLowerCase().includes("owner_id")) {
+    delete row.owner_id;
+    ins = await supabase.from("documents").insert(row);
+  }
 
   if (ins.error) {
     return NextResponse.json({ ok: false, error: ins.error.message }, { status: 500 });

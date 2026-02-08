@@ -51,6 +51,18 @@ export default async function EntityHomePage() {
           <form
             action={async () => {
               "use server";
+
+              function normalize(s: string) {
+                return s
+                  .trim()
+                  .toLowerCase()
+                  .normalize("NFD")
+                  .replace(/[\u0300-\u036f]/g, "")
+                  .replace(/\s+/g, " ")
+                  .replace(/[^\w\s-]/g, "")
+                  .trim();
+              }
+
               const supabase = await createClient();
 
               const {
@@ -67,7 +79,6 @@ export default async function EntityHomePage() {
               const entityId = profile?.entity_id;
               if (!entityId) redirect("/unauthorized");
 
-              // Buscar uma categoria ativa (garantir não-null se a coluna for NOT NULL)
               const { data: cat, error: catErr } = await supabase
                 .from("categories")
                 .select("id")
@@ -76,16 +87,17 @@ export default async function EntityHomePage() {
                 .limit(1)
                 .single();
 
-              if (catErr || !cat?.id) {
-                redirect("/entity?err=no_categories");
-              }
+              if (catErr || !cat?.id) redirect("/entity?err=no_categories");
+
+              const title = "Novo pedido";
 
               const ins = await supabase
                 .from("applications")
                 .insert({
                   entity_id: entityId,
                   category_id: cat.id,
-                  object_title: "Novo pedido",
+                  object_title: title,
+                  object_normalized: normalize(title),
                   requested_amount: 0,
                   current_status: "S1_DRAFT",
                   origin: "SPONTANEOUS",
@@ -101,9 +113,7 @@ export default async function EntityHomePage() {
               redirect(`/entity/applications/${ins.data.id}`);
             }}
           >
-            <button className="rounded-md bg-black px-3 py-2 text-sm text-white">
-              + Novo pedido
-            </button>
+            <button className="rounded-md bg-black px-3 py-2 text-sm text-white">+ Novo pedido</button>
           </form>
         </div>
       </header>
@@ -139,7 +149,6 @@ export default async function EntityHomePage() {
                   <td className="py-2">{a.created_at ? new Date(a.created_at).toLocaleString() : "-"}</td>
                 </tr>
               ))}
-
               {(apps?.length ?? 0) === 0 && (
                 <tr>
                   <td className="py-3 text-neutral-600" colSpan={4}>
