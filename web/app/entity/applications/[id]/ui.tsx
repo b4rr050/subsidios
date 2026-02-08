@@ -17,6 +17,7 @@ type DocRow = {
   status: "PENDING" | "APPROVED" | "REJECTED";
   uploaded_at: string;
   review_comment: string | null;
+  reviewed_at?: string | null;
 };
 
 type App = {
@@ -52,6 +53,11 @@ function money(v: any) {
   return `${n.toFixed(2)} €`;
 }
 
+function fmtDate(dt?: string | null) {
+  if (!dt) return "-";
+  return new Date(dt).toLocaleString("pt-PT", { timeZone: "Europe/Lisbon" });
+}
+
 export default function ApplicationClient({
   application,
   categories,
@@ -85,6 +91,7 @@ export default function ApplicationClient({
   const [docMsg, setDocMsg] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
   const [deleting, setDeleting] = useState(false);
+  const [docBusyId, setDocBusyId] = useState<string | null>(null);
 
   const status = application.current_status;
 
@@ -190,6 +197,7 @@ export default function ApplicationClient({
     const safeName = file.name.replace(/[^\w.\-() ]+/g, "_");
     const storagePath = `applications/${application.id}/${Date.now()}_${safeName}`;
 
+    // 1) upload ao storage
     const up = await supabase.storage.from("docs").upload(storagePath, file, {
       cacheControl: "3600",
       upsert: false,
@@ -202,6 +210,7 @@ export default function ApplicationClient({
       return;
     }
 
+    // 2) registo na BD
     const res = await fetch(`/api/entity/applications/${application.id}/documents/create`, {
       method: "POST",
       headers: { "content-type": "application/json" },
@@ -225,6 +234,33 @@ export default function ApplicationClient({
     setDocMsg("Documento submetido.");
     setFile(null);
     setDocTypeId("");
+    router.refresh();
+  }
+
+  async function onRemoveDoc(d: DocRow) {
+    setDocMsg(null);
+
+    if (!canUploadApplicationDocs) {
+      setDocMsg("Só é possível remover documentos em DRAFT/RETURNED.");
+      return;
+    }
+    if (d.status !== "PENDING") {
+      setDocMsg("Só é possível remover documentos pendentes.");
+      return;
+    }
+    if (!window.confirm("Remover este documento?")) return;
+
+    setDocBusyId(d.id);
+    const res = await fetch(`/api/entity/documents/${d.id}/delete`, { method: "POST" });
+    const data = await res.json().catch(() => ({}));
+    setDocBusyId(null);
+
+    if (!res.ok || data?.ok !== true) {
+      setDocMsg(data?.error ?? "Erro ao remover documento.");
+      return;
+    }
+
+    setDocMsg("Documento removido.");
     router.refresh();
   }
 
@@ -266,9 +302,8 @@ export default function ApplicationClient({
             <h2 className="font-medium">Dados do pedido</h2>
             <p className="text-sm text-neutral-900">{application.object_title}</p>
             <p className="text-xs text-neutral-600">
-              Origem: {application.origin ?? "-"} • Criado:{" "}
-              {application.created_at ? new Date(application.created_at).toLocaleString() : "-"} • Atualizado:{" "}
-              {application.updated_at ? new Date(application.updated_at).toLocaleString() : "-"}
+              Origem: {application.origin ?? "-"} • Criado: {fmtDate(application.created_at)} • Atualizado:{" "}
+              {fmtDate(application.updated_at)}
             </p>
           </div>
 
@@ -396,32 +431,50 @@ export default function ApplicationClient({
         </form>
 
         <div className="mt-4 overflow-auto">
-          <table className="min-w-[900px] w-full text-sm">
+          <table className="min-w-[1050px] w-full text-sm">
             <thead>
               <tr className="text-left border-b">
                 <th className="py-2">Nome</th>
                 <th className="py-2">Estado</th>
                 <th className="py-2">Comentário</th>
                 <th className="py-2">Data</th>
+                <th className="py-2">Ações</th>
               </tr>
             </thead>
             <tbody>
-              {documents.map((d) => (
-                <tr key={d.id} className="border-b">
-                  <td className="py-2">
-                    <button className="underline" type="button" onClick={() => openDoc(d)}>
-                      {d.original_name}
-                    </button>
-                    <div className="text-xs text-neutral-500">{docTypeNameById[d.document_type_id] ?? "-"}</div>
-                  </td>
-                  <td className="py-2">{d.status}</td>
-                  <td className="py-2">{d.review_comment ?? "-"}</td>
-                  <td className="py-2">{d.uploaded_at ? new Date(d.uploaded_at).toLocaleString() : "-"}</td>
-                </tr>
-              ))}
+              {documents.map((d) => {
+                const canRemove = canUploadApplicationDocs && d.status === "PENDING" && !d.reviewed_at;
+                return (
+                  <tr key={d.id} className="border-b">
+                    <td className="py-2">
+                      <button className="underline" type="button" onClick={() => openDoc(d)}>
+                        {d.original_name}
+                      </button>
+                      <div className="text-xs text-neutral-500">{docTypeNameById[d.document_type_id] ?? "-"}</div>
+                    </td>
+
+                    <td className="py-2">{d.status}</td>
+                    <td className="py-2">{d.review_comment ?? "-"}</td>
+                    <td className="py-2">{fmtDate(d.uploaded_at)}</td>
+
+                    <td className="py-2">
+                      <button
+                        type="button"
+                        className="rounded-md border px-2 py-1 text-xs text-red-700 disabled:opacity-60"
+                        disabled={!canRemove || docBusyId === d.id}
+                        onClick={() => onRemoveDoc(d)}
+                        title="Só em DRAFT/RETURNED e documentos pendentes"
+                      >
+                        {docBusyId === d.id ? "..." : "Remover"}
+                      </button>
+                    </td>
+                  </tr>
+                );
+              })}
+
               {documents.length === 0 && (
                 <tr>
-                  <td className="py-3 text-neutral-600" colSpan={4}>
+                  <td className="py-3 text-neutral-600" colSpan={5}>
                     Ainda não existem documentos.
                   </td>
                 </tr>
@@ -449,10 +502,11 @@ export default function ApplicationClient({
                 <tr key={h.id} className="border-b">
                   <td className="py-2">{h.from_status ?? "-"}</td>
                   <td className="py-2">{h.to_status}</td>
-                  <td className="py-2">{h.changed_at ? new Date(h.changed_at).toLocaleString() : "-"}</td>
+                  <td className="py-2">{fmtDate(h.changed_at)}</td>
                   <td className="py-2">{h.comment ?? "-"}</td>
                 </tr>
               ))}
+
               {history.length === 0 && (
                 <tr>
                   <td className="py-3 text-neutral-600" colSpan={4}>
