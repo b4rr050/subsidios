@@ -23,7 +23,6 @@ export default function LoginPage() {
     });
 
     const data = await res.json().catch(() => ({}));
-
     setLoading(false);
 
     if (!res.ok || data?.ok !== true) {
@@ -31,8 +30,8 @@ export default function LoginPage() {
       return;
     }
 
-    setMsg("Login efetuado. A redirecionar...");
-    router.replace("/");
+    // ✅ SEMPRE ir para a lista
+    router.replace("/entity");
     router.refresh();
   }
 
@@ -48,7 +47,6 @@ export default function LoginPage() {
             value={email}
             onChange={(e) => setEmail(e.target.value)}
             type="email"
-            autoComplete="email"
             required
           />
         </div>
@@ -60,12 +58,11 @@ export default function LoginPage() {
             value={password}
             onChange={(e) => setPassword(e.target.value)}
             type="password"
-            autoComplete="current-password"
             required
           />
         </div>
 
-        {msg && <p className="text-sm">{msg}</p>}
+        {msg && <p className="text-sm text-red-600">{msg}</p>}
 
         <button
           type="submit"
@@ -74,10 +71,6 @@ export default function LoginPage() {
         >
           {loading ? "A entrar..." : "Entrar"}
         </button>
-
-        <p className="text-xs text-neutral-600">
-          Nota: os utilizadores serão criados pelo Admin no backoffice.
-        </p>
       </form>
     </div>
   );
