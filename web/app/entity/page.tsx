@@ -2,9 +2,34 @@ import Link from "next/link";
 import { redirect } from "next/navigation";
 import { createClient } from "@/lib/supabase/server";
 
+type RoleCode = "ENTITY";
+
+type ProfileRow = {
+  id: string;
+  full_name: string | null;
+  email: string | null;
+  entity_id: string | null;
+};
+
+type EntityRow = {
+  id: string;
+  name: string;
+  nif: string;
+  email: string | null;
+  phone: string | null;
+};
+
+type ApplicationRow = {
+  id: string; // ✅ obrigatório (é isto que estava a vir undefined)
+  object_title: string;
+  requested_amount: number | null;
+  current_status: string;
+  created_at: string | null;
+};
+
 async function isEntityUser() {
   const supabase = await createClient();
-  const { data, error } = await supabase.rpc("has_role", { role: "ENTITY" });
+  const { data, error } = await supabase.rpc("has_role", { role: "ENTITY" as RoleCode });
   if (error) return false;
   return data === true;
 }
@@ -14,17 +39,27 @@ export default async function EntityHomePage() {
 
   const supabase = await createClient();
 
-  const { data: profile } = await supabase
+  const { data: profileData, error: profileErr } = await supabase
     .from("profiles")
     .select("id, full_name, email, entity_id")
     .single();
 
-  const entityId = profile?.entity_id;
+  if (profileErr || !profileData) {
+    return (
+      <div className="p-6">
+        <h1 className="text-xl font-semibold">Área da Entidade</h1>
+        <p className="mt-2 text-sm text-red-600">Erro a carregar perfil.</p>
+      </div>
+    );
+  }
+
+  const profile = profileData as ProfileRow;
+  const entityId = profile.entity_id;
 
   if (!entityId) {
     return (
       <div className="p-6">
-        <h1 className="text-xl font-semibold">Entidade</h1>
+        <h1 className="text-xl font-semibold">Área da Entidade</h1>
         <p className="mt-2 text-sm text-red-600">
           A tua conta não tem entidade associada. Contacta o administrador.
         </p>
@@ -32,13 +67,16 @@ export default async function EntityHomePage() {
     );
   }
 
-  const { data: entity } = await supabase
+  const { data: entityData } = await supabase
     .from("entities")
     .select("id, name, nif, email, phone")
     .eq("id", entityId)
     .single();
 
-  const { data: applications, error: appsErr } = await supabase
+  const entity = entityData as EntityRow | null;
+
+  // ✅ IMPORTANTE: garantir que vem o campo "id" no select
+  const { data: applicationsData, error: appsErr } = await supabase
     .from("applications")
     .select("id, object_title, requested_amount, current_status, created_at")
     .eq("entity_id", entityId)
@@ -46,13 +84,15 @@ export default async function EntityHomePage() {
     .order("created_at", { ascending: false })
     .limit(50);
 
+  const applications = (applicationsData ?? []) as ApplicationRow[];
+
   return (
     <div className="p-6 space-y-6">
       <header className="flex items-center justify-between">
         <div>
           <h1 className="text-xl font-semibold">Área da Entidade</h1>
           <p className="text-sm text-neutral-600">
-            {entity?.name} · NIF {entity?.nif}
+            {entity?.name ?? "Entidade"} · NIF {entity?.nif ?? "-"}
           </p>
         </div>
 
@@ -76,7 +116,10 @@ export default async function EntityHomePage() {
           </p>
         </div>
 
-        <Link className="rounded-md bg-black px-3 py-2 text-sm text-white" href="/entity/applications/new">
+        <Link
+          className="rounded-md bg-black px-3 py-2 text-sm text-white"
+          href="/entity/applications/new"
+        >
           Novo pedido
         </Link>
       </section>
@@ -96,20 +139,25 @@ export default async function EntityHomePage() {
                 <th className="py-2">Criado</th>
               </tr>
             </thead>
+
             <tbody>
-              {(applications ?? []).map((a) => (
+              {applications.map((a) => (
                 <tr key={a.id} className="border-b">
                   <td className="py-2">
+                    {/* ✅ Aqui era onde estava a gerar undefined */}
                     <Link className="underline" href={`/entity/applications/${a.id}`}>
                       {a.object_title}
                     </Link>
-                  </td>                  
+                  </td>
                   <td className="py-2">{Number(a.requested_amount ?? 0).toFixed(2)} €</td>
                   <td className="py-2">{a.current_status}</td>
-                  <td className="py-2">{a.created_at ? new Date(a.created_at).toLocaleString() : "-"}</td>
+                  <td className="py-2">
+                    {a.created_at ? new Date(a.created_at).toLocaleString() : "-"}
+                  </td>
                 </tr>
               ))}
-              {(applications ?? []).length === 0 && (
+
+              {applications.length === 0 && (
                 <tr>
                   <td className="py-3 text-neutral-600" colSpan={4}>
                     Ainda não existem pedidos.
