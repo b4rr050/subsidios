@@ -1,70 +1,61 @@
-import { NextResponse, type NextRequest } from "next/server";
-import { createServerClient } from "@supabase/ssr";
+import { NextRequest, NextResponse } from "next/server";
+import { createClient } from "@/lib/supabase/middleware";
 
 export async function middleware(req: NextRequest) {
-  const pathname = req.nextUrl.pathname;
-
-  // ✅ Nunca aplicar middleware às rotas de API
-  if (pathname.startsWith("/api")) {
-    return NextResponse.next();
-  }
-
-  // Rotas públicas
-  const publicPaths = ["/login"];
-  const isPublic = publicPaths.some((p) => pathname === p || pathname.startsWith(p + "/"));
-
-  // Permitir assets e rotas internas do Next
-  if (
-    pathname.startsWith("/_next") ||
-    pathname.startsWith("/favicon.ico") ||
-    pathname.startsWith("/public")
-  ) {
-    return NextResponse.next();
-  }
-
   const res = NextResponse.next();
-
-  const supabase = createServerClient(
-    process.env.NEXT_PUBLIC_SUPABASE_URL!,
-    process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!,
-    {
-      cookies: {
-        getAll() {
-          return req.cookies.getAll();
-        },
-        setAll(cookiesToSet) {
-          cookiesToSet.forEach(({ name, value, options }) => {
-            res.cookies.set(name, value, options);
-          });
-        },
-      },
-    }
-  );
+  const supabase = createClient(req, res);
 
   const {
     data: { user },
   } = await supabase.auth.getUser();
 
-  // Se não está autenticado e tenta rota privada -> login
-  if (!user && !isPublic) {
+  const pathname = req.nextUrl.pathname;
+
+  // Rotas públicas (não protegidas)
+  const publicPaths = ["/login", "/unauthorized", "/"];
+  if (publicPaths.includes(pathname)) {
+    return res;
+  }
+
+  // Se não estiver autenticado, redireciona para login
+  if (!user) {
     const url = req.nextUrl.clone();
     url.pathname = "/login";
-    url.searchParams.set("next", pathname);
     return NextResponse.redirect(url);
   }
 
-  // Se está autenticado e tenta ir ao login -> manda para home
-  if (user && pathname === "/login") {
-    const url = req.nextUrl.clone();
-    url.pathname = "/";
-    url.searchParams.delete("next");
-    return NextResponse.redirect(url);
+  /* =========================
+     ADMIN
+  ========================= */
+  if (pathname.startsWith("/admin")) {
+    const { data: isAdmin } = await supabase.rpc("has_role", { role: "ADMIN" });
+    if (isAdmin !== true) {
+      const url = req.nextUrl.clone();
+      url.pathname = "/unauthorized";
+      return NextResponse.redirect(url);
+    }
   }
 
-  // Proteção extra para /admin: só ADMIN
-  if (user && pathname.startsWith("/admin")) {
-    const { data, error } = await supabase.rpc("has_role", { role: "ADMIN" });
-    if (error || data !== true) {
+  /* =========================
+     BACKOFFICE (ADMIN ou TECH)
+  ========================= */
+  if (pathname.startsWith("/backoffice")) {
+    const { data: isAdmin } = await supabase.rpc("has_role", { role: "ADMIN" });
+    const { data: isTech } = await supabase.rpc("has_role", { role: "TECH" });
+
+    if (isAdmin !== true && isTech !== true) {
+      const url = req.nextUrl.clone();
+      url.pathname = "/unauthorized";
+      return NextResponse.redirect(url);
+    }
+  }
+
+  /* =========================
+     ENTITY
+  ========================= */
+  if (pathname.startsWith("/entity")) {
+    const { data: isEntity } = await supabase.rpc("has_role", { role: "ENTITY" });
+    if (isEntity !== true) {
       const url = req.nextUrl.clone();
       url.pathname = "/unauthorized";
       return NextResponse.redirect(url);
@@ -75,5 +66,12 @@ export async function middleware(req: NextRequest) {
 }
 
 export const config = {
-  matcher: ["/((?!api|_next/static|_next/image|favicon.ico).*)"],
+  matcher: [
+    /*
+      Protege tudo exceto:
+      - ficheiros estáticos
+      - api routes públicas (as privadas continuam protegidas por RLS)
+    */
+    "/((?!_next/static|_next/image|favicon.ico).*)",
+  ],
 };
