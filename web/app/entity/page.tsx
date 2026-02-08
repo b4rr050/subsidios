@@ -99,7 +99,11 @@ export default async function EntityHomePage() {
             <tbody>
               {(applications ?? []).map((a) => (
                 <tr key={a.id} className="border-b">
-                  <td className="py-2">{a.object_title}</td>
+                  <td className="py-2">
+                    <Link className="underline" href={`/entity/applications/${a.id}`}>
+                      {a.object_title}
+                    </Link>
+                  </td>                  
                   <td className="py-2">{Number(a.requested_amount ?? 0).toFixed(2)} €</td>
                   <td className="py-2">{a.current_status}</td>
                   <td className="py-2">{a.created_at ? new Date(a.created_at).toLocaleString() : "-"}</td>
