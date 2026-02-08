@@ -1,74 +1,101 @@
-import { NextRequest, NextResponse } from "next/server";
-import { z } from "zod";
+import { NextResponse } from "next/server";
 import { createClient } from "@/lib/supabase/server";
-import { normalizeText } from "@/lib/text";
 
-const BodySchema = z.object({
-  category_id: z.string().uuid(),
-  object_title: z.string().min(3),
-  requested_amount: z.coerce.number().min(0),
-});
-
-export async function POST(req: NextRequest) {
+async function isEntityUser() {
   const supabase = await createClient();
+  const { data } = await supabase.rpc("has_role", { role: "ENTITY" });
+  return data === true;
+}
 
-  const { data: userData } = await supabase.auth.getUser();
-  if (!userData.user) return NextResponse.json({ ok: false, error: "Not authenticated" }, { status: 401 });
+function normalizeObjectTitle(s: string) {
+  return (s ?? "")
+    .trim()
+    .toLowerCase()
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "") // remove acentos
+    .replace(/[^a-z0-9]+/g, " ") // só letras/números
+    .replace(/\s+/g, " ")
+    .trim();
+}
 
-  const { data: isEntity } = await supabase.rpc("has_role", { role: "ENTITY" });
-  if (isEntity !== true) return NextResponse.json({ ok: false, error: "Forbidden" }, { status: 403 });
+export async function POST(req: Request) {
+  try {
+    if (!(await isEntityUser())) {
+      return NextResponse.json({ ok: false, error: "Sem permissão." }, { status: 403 });
+    }
 
-  const json = await req.json().catch(() => null);
-  const parsed = BodySchema.safeParse(json);
-  if (!parsed.success) return NextResponse.json({ ok: false, error: "Invalid payload" }, { status: 400 });
+    const supabase = await createClient();
+    const {
+      data: { user },
+      error: userErr,
+    } = await supabase.auth.getUser();
 
-  const { data: profile, error: profErr } = await supabase
-    .from("profiles")
-    .select("entity_id")
-    .eq("id", userData.user.id)
-    .single();
+    if (userErr || !user) {
+      return NextResponse.json({ ok: false, error: "Não autenticado." }, { status: 401 });
+    }
 
-  if (profErr || !profile?.entity_id) {
-    return NextResponse.json({ ok: false, error: "No entity linked to user" }, { status: 400 });
-  }
+    const body = await req.json().catch(() => ({}));
 
-  const entityId = profile.entity_id;
-  const { category_id, object_title, requested_amount } = parsed.data;
+    const category_id = body?.category_id ? String(body.category_id) : null;
+    const object_title = String(body?.object_title ?? "").trim();
 
-  const object_normalized = normalizeText(object_title);
+    // 🔒 Campos obrigatórios no teu schema:
+    // - entity_id (vem do profile)
+    // - category_id NOT NULL  (se queres permitir "sem categoria", tens de mudar schema)
+    // - object_title NOT NULL
+    // - object_normalized NOT NULL
+    // - requested_amount NOT NULL
 
-  // Warning: procurar possíveis duplicados (não bloqueia, só devolve lista)
-  const dupRes = await supabase
-    .from("applications")
-    .select("id, object_title, created_at, current_status")
-    .eq("entity_id", entityId)
-    .eq("is_deleted", false)
-    .ilike("object_normalized", `%${object_normalized}%`)
-    .limit(5);
+    if (!category_id) {
+      return NextResponse.json({ ok: false, error: "Categoria é obrigatória." }, { status: 400 });
+    }
+    if (!object_title) {
+      return NextResponse.json({ ok: false, error: "Título/Objeto é obrigatório." }, { status: 400 });
+    }
 
-  const insertRes = await supabase
-    .from("applications")
-    .insert({
-      origin: "SPONTANEOUS",
+    const { data: profile, error: profErr } = await supabase
+      .from("profiles")
+      .select("entity_id")
+      .eq("id", user.id)
+      .single();
+
+    if (profErr) {
+      return NextResponse.json({ ok: false, error: profErr.message }, { status: 400 });
+    }
+
+    const entity_id = profile?.entity_id;
+    if (!entity_id) {
+      return NextResponse.json({ ok: false, error: "Utilizador sem entidade associada." }, { status: 403 });
+    }
+
+    const row = {
+      origin: "SPONTANEOUS", // ajusta se o teu enum for outro; se der erro, diz-me o enum exato
       program_id: null,
-      entity_id: entityId,
+      entity_id,
       category_id,
       object_title,
-      object_normalized,
-      requested_amount,
-      current_status: "S1_DRAFT",
-      created_by: userData.user.id,
-    })
-    .select("id")
-    .single();
+      object_normalized: normalizeObjectTitle(object_title),
 
-  if (insertRes.error) {
-    return NextResponse.json({ ok: false, error: insertRes.error.message }, { status: 500 });
+      // ✅ blindagem: nunca null
+      requested_amount: 0,
+
+      // gestão
+      created_by: user.id,
+      is_deleted: false,
+    };
+
+    const { data: created, error: insErr } = await supabase
+      .from("applications")
+      .insert(row)
+      .select("id")
+      .single();
+
+    if (insErr) {
+      return NextResponse.json({ ok: false, error: insErr.message }, { status: 400 });
+    }
+
+    return NextResponse.json({ ok: true, id: created.id });
+  } catch (e: any) {
+    return NextResponse.json({ ok: false, error: e?.message ?? "Erro inesperado." }, { status: 500 });
   }
-
-  return NextResponse.json({
-    ok: true,
-    id: insertRes.data.id,
-    possibleDuplicates: dupRes.data ?? [],
-  });
 }

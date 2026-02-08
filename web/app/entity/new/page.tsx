@@ -6,10 +6,11 @@ type InsertApp = {
   category_id: string;
   object_title: string;
   object_normalized: string;
-  requested_amount: number | null;
+  requested_amount: number; // ✅ nunca null
   current_status: string;
   origin: string;
   is_deleted?: boolean;
+  created_by?: string | null;
 };
 
 function normalizeTitle(input: string) {
@@ -55,7 +56,7 @@ export default async function EntityNewApplicationPage() {
   const entityId = profile?.entity_id;
   if (!entityId) redirect("/unauthorized");
 
-  // ✅ category_id é NOT NULL na tua BD -> escolher uma categoria ativa por defeito
+  // ✅ category_id é NOT NULL -> escolher uma categoria ativa por defeito
   const { data: defaultCat, error: catErr } = await supabase
     .from("categories")
     .select("id, name")
@@ -65,7 +66,14 @@ export default async function EntityNewApplicationPage() {
     .maybeSingle();
 
   if (catErr) redirect(`/entity?err=${encodeURIComponent(catErr.message)}`);
-  if (!defaultCat?.id) redirect(`/entity?err=${encodeURIComponent("Não existem categorias ativas. Cria uma categoria antes de criar pedidos.")}`);
+
+  if (!defaultCat?.id) {
+    redirect(
+      `/entity?err=${encodeURIComponent(
+        "Não existem categorias ativas. Cria uma categoria antes de criar pedidos."
+      )}`
+    );
+  }
 
   const object_title = "Novo pedido";
 
@@ -74,13 +82,23 @@ export default async function EntityNewApplicationPage() {
     category_id: defaultCat.id,
     object_title,
     object_normalized: normalizeTitle(object_title),
-    requested_amount: null,
+
+    // ✅ FIX: NOT NULL na BD
+    requested_amount: 0,
+
     current_status: "S1_DRAFT",
     origin: "SPONTANEOUS",
     is_deleted: false,
+
+    // (útil para auditoria/relatórios)
+    created_by: user.id,
   };
 
-  const { data: created, error: insErr } = await supabase.from("applications").insert(payload).select("id").single();
+  const { data: created, error: insErr } = await supabase
+    .from("applications")
+    .insert(payload)
+    .select("id")
+    .single();
 
   if (insErr || !created?.id) {
     const msg = insErr?.message ?? "create_failed";

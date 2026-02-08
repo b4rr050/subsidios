@@ -5,6 +5,13 @@ import { useRouter } from "next/navigation";
 
 type Category = { id: string; name: string };
 
+function parseAmountToNumber(v: string) {
+  const s = String(v ?? "").trim().replace(",", ".");
+  if (!s.length) return 0;
+  const n = Number(s);
+  return Number.isFinite(n) ? n : 0;
+}
+
 export default function NewApplicationClient({ categories }: { categories: Category[] }) {
   const router = useRouter();
   const [categoryId, setCategoryId] = useState(categories[0]?.id ?? "");
@@ -22,13 +29,15 @@ export default function NewApplicationClient({ categories }: { categories: Categ
     setDups([]);
     setLoading(true);
 
+    const requested_amount = parseAmountToNumber(amount);
+
     const res = await fetch("/api/entity/applications/create", {
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify({
         category_id: categoryId,
         object_title: title,
-        requested_amount: amount,
+        requested_amount, // ✅ número, nunca null/"".
       }),
     });
 
@@ -53,21 +62,39 @@ export default function NewApplicationClient({ categories }: { categories: Categ
     <form onSubmit={submit} className="max-w-2xl grid gap-4 rounded-2xl border p-4 shadow-sm">
       <div className="grid gap-2">
         <label className="text-sm">Categoria</label>
-        <select className="rounded-md border px-3 py-2" value={categoryId} onChange={(e) => setCategoryId(e.target.value)} required>
+        <select
+          className="rounded-md border px-3 py-2"
+          value={categoryId}
+          onChange={(e) => setCategoryId(e.target.value)}
+          required
+        >
           {categories.map((c) => (
-            <option key={c.id} value={c.id}>{c.name}</option>
+            <option key={c.id} value={c.id}>
+              {c.name}
+            </option>
           ))}
         </select>
       </div>
 
       <div className="grid gap-2">
         <label className="text-sm">Título / Objeto</label>
-        <input className="rounded-md border px-3 py-2" value={title} onChange={(e) => setTitle(e.target.value)} required />
+        <input
+          className="rounded-md border px-3 py-2"
+          value={title}
+          onChange={(e) => setTitle(e.target.value)}
+          required
+        />
       </div>
 
       <div className="grid gap-2">
         <label className="text-sm">Valor solicitado (€)</label>
-        <input className="rounded-md border px-3 py-2" value={amount} onChange={(e) => setAmount(e.target.value)} inputMode="decimal" />
+        <input
+          className="rounded-md border px-3 py-2"
+          value={amount}
+          onChange={(e) => setAmount(e.target.value)}
+          inputMode="decimal"
+          placeholder="0"
+        />
       </div>
 
       {msg && <p className="text-sm">{msg}</p>}
