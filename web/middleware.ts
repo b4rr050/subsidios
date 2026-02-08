@@ -2,9 +2,16 @@ import { NextResponse, type NextRequest } from "next/server";
 import { createServerClient } from "@supabase/ssr";
 
 export async function middleware(req: NextRequest) {
+  const pathname = req.nextUrl.pathname;
+
+  // ✅ Nunca aplicar middleware às rotas de API
+  if (pathname.startsWith("/api")) {
+    return NextResponse.next();
+  }
+
   // Rotas públicas
   const publicPaths = ["/login"];
-  const pathname = req.nextUrl.pathname;
+  const isPublic = publicPaths.some((p) => pathname === p || pathname.startsWith(p + "/"));
 
   // Permitir assets e rotas internas do Next
   if (
@@ -15,7 +22,6 @@ export async function middleware(req: NextRequest) {
     return NextResponse.next();
   }
 
-  // Se for público, deixa passar (mas mantém sessão atualizada)
   const res = NextResponse.next();
 
   const supabase = createServerClient(
@@ -40,7 +46,6 @@ export async function middleware(req: NextRequest) {
   } = await supabase.auth.getUser();
 
   // Se não está autenticado e tenta rota privada -> login
-  const isPublic = publicPaths.some((p) => pathname === p || pathname.startsWith(p + "/"));
   if (!user && !isPublic) {
     const url = req.nextUrl.clone();
     url.pathname = "/login";
@@ -70,12 +75,5 @@ export async function middleware(req: NextRequest) {
 }
 
 export const config = {
-  matcher: [
-    /*
-      Aplica a todas as rotas exceto:
-      - static files
-      - imagens
-    */
-    "/((?!_next/static|_next/image|favicon.ico).*)",
-  ],
+  matcher: ["/((?!api|_next/static|_next/image|favicon.ico).*)"],
 };
