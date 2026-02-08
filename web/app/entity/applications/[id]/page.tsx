@@ -17,51 +17,39 @@ export default async function EntityApplicationDetailPage({
 }) {
   if (!(await isEntityUser())) redirect("/unauthorized");
 
-  // ✅ Next 15: params pode ser Promise
   const { id: appId } = await params;
-
   const supabase = await createClient();
 
-  const { data: userData } = await supabase.auth.getUser();
-  if (!userData.user) redirect("/login");
+  const {
+    data: { user },
+  } = await supabase.auth.getUser();
 
-  // entity_id do utilizador
-  const { data: profile, error: profErr } = await supabase
+  if (!user) redirect("/login");
+
+  const { data: profile } = await supabase
     .from("profiles")
     .select("entity_id")
-    .eq("id", userData.user.id)
+    .eq("id", user.id)
     .single();
 
   const entityId = profile?.entity_id;
-  if (profErr || !entityId) redirect("/unauthorized");
+  if (!entityId) redirect("/unauthorized");
 
-  // pedido
-  const { data: app, error: appErr } = await supabase
+  const { data: app } = await supabase
     .from("applications")
-    .select(
-      "id, entity_id, category_id, object_title, requested_amount, current_status, created_at, updated_at, origin"
-    )
+    .select("id, entity_id, category_id, object_title, requested_amount, current_status, created_at, updated_at, origin")
     .eq("id", appId)
     .single();
 
-  if (appErr || !app) {
+  if (!app) {
     return (
       <div className="p-6">
         <h1 className="text-xl font-semibold">Pedido</h1>
         <p className="mt-2 text-sm text-red-600">Pedido não encontrado.</p>
-        <div className="mt-3 text-xs text-neutral-600">
-          <p>
-            <b>ID pedido:</b> {String(appId)}
-          </p>
-          <p>
-            <b>Erro:</b> {appErr?.message ?? "sem erro (null)"}
-          </p>
-        </div>
       </div>
     );
   }
 
-  // segurança extra
   if (app.entity_id !== entityId) redirect("/unauthorized");
 
   const { data: categories } = await supabase
@@ -75,7 +63,24 @@ export default async function EntityApplicationDetailPage({
     .select("id, from_status, to_status, changed_at, comment")
     .eq("application_id", app.id)
     .order("changed_at", { ascending: false })
-    .limit(20);
+    .limit(50);
+
+  // Tipos de documento para candidatura
+  const { data: documentTypes } = await supabase
+    .from("document_types")
+    .select("id, code, name, scope")
+    .eq("scope", "APPLICATION")
+    .eq("is_active", true)
+    .order("name");
+
+  // Documentos já anexados
+  const { data: documents } = await supabase
+    .from("documents")
+    .select("id, document_type_id, file_path, original_name, mime_type, size_bytes, status, uploaded_at, review_comment")
+    .eq("application_id", app.id)
+    .eq("is_deleted", false)
+    .order("uploaded_at", { ascending: false })
+    .limit(200);
 
   return (
     <div className="p-6 space-y-6">
@@ -84,6 +89,7 @@ export default async function EntityApplicationDetailPage({
           <h1 className="text-xl font-semibold">Pedido</h1>
           <p className="text-sm text-neutral-600">{app.id}</p>
         </div>
+
         <a className="rounded-md border px-3 py-2 text-sm" href="/entity">
           Voltar
         </a>
@@ -93,6 +99,9 @@ export default async function EntityApplicationDetailPage({
         application={app}
         categories={categories ?? []}
         history={history ?? []}
+        entityId={entityId}
+        documentTypes={documentTypes ?? []}
+        documents={documents ?? []}
       />
     </div>
   );
