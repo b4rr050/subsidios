@@ -1,114 +1,119 @@
-import { NextRequest, NextResponse } from "next/server";
-import { z } from "zod";
+import { NextResponse } from "next/server";
 import { createClient } from "@/lib/supabase/server";
 
-const BodySchema = z.object({
-  document_type_id: z.string().uuid(),
-  file_path: z.string().min(1), // path no storage bucket
-  original_name: z.string().min(1),
-  mime_type: z.string().nullable().optional(),
-  size_bytes: z.number().int().nullable().optional(),
-});
+type Ctx = { params: Promise<{ id: string }> };
 
-function isColumnMissing(errMsg: string | undefined | null, col: string) {
-  if (!errMsg) return false;
-  const m = errMsg.toLowerCase();
-  return m.includes("column") && m.includes(col.toLowerCase());
+async function isEntityUser() {
+  const supabase = await createClient();
+  const { data } = await supabase.rpc("has_role", { role: "ENTITY" });
+  return data === true;
 }
 
-export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string }> }) {
-  const { id: applicationId } = await ctx.params;
-
-  const supabase = await createClient();
-
-  const {
-    data: { user },
-  } = await supabase.auth.getUser();
-
-  if (!user) return NextResponse.json({ ok: false, error: "Not authenticated" }, { status: 401 });
-
-  const role = await supabase.rpc("has_role", { role: "ENTITY" });
-  if (role.data !== true) return NextResponse.json({ ok: false, error: "Forbidden" }, { status: 403 });
-
-  const json = await req.json().catch(() => null);
-  const parsed = BodySchema.safeParse(json);
-  if (!parsed.success) return NextResponse.json({ ok: false, error: "Invalid payload" }, { status: 400 });
-
-  const { data: profile, error: profErr } = await supabase
-    .from("profiles")
-    .select("entity_id")
-    .eq("id", user.id)
-    .single();
-
-  if (profErr || !profile?.entity_id) {
-    return NextResponse.json({ ok: false, error: "Missing entity profile" }, { status: 400 });
-  }
-
-  const entityId = profile.entity_id;
-
-  const { data: app, error: appErr } = await supabase
-    .from("applications")
-    .select("id, entity_id, current_status, is_deleted")
-    .eq("id", applicationId)
-    .single();
-
-  if (appErr || !app || app.is_deleted) {
-    return NextResponse.json({ ok: false, error: "Application not found" }, { status: 404 });
-  }
-
-  if (app.entity_id !== entityId) {
-    return NextResponse.json({ ok: false, error: "Forbidden (wrong entity)" }, { status: 403 });
-  }
-
-  const can = await supabase.rpc("can_upload_application_docs", { app_id: applicationId });
-  if (can.data !== true) {
-    return NextResponse.json({ ok: false, error: "Upload fechado: pedido não está numa fase aberta." }, { status: 409 });
-  }
-
-  // Base row (vamos adicionar storage_path / owner_id de forma compatível)
-  const base: any = {
-    owner_type: "APPLICATION",
-    scope: "APPLICATION",
-    entity_id: entityId,
-    application_id: applicationId,
-    document_type_id: parsed.data.document_type_id,
-    original_name: parsed.data.original_name,
-    mime_type: parsed.data.mime_type ?? null,
-    size_bytes: parsed.data.size_bytes ?? null,
-    status: "PENDING",
-    uploaded_by: user.id,
-  };
-
-  // paths: algumas versões usam storage_path, outras file_path
-  const withStoragePath = { ...base, storage_path: parsed.data.file_path };
-  const withFilePath = { ...base, file_path: parsed.data.file_path };
-
-  // owner_id opcional (se existir)
-  withStoragePath.owner_id = applicationId;
-  withFilePath.owner_id = applicationId;
-
-  // 1) tenta com storage_path
-  let ins = await supabase.from("documents").insert(withStoragePath);
-
-  // se falhar porque não existe owner_id, tenta sem owner_id
-  if (ins.error && isColumnMissing(ins.error.message, "owner_id")) {
-    delete withStoragePath.owner_id;
-    ins = await supabase.from("documents").insert(withStoragePath);
-  }
-
-  // se falhar porque não existe storage_path, tenta file_path
-  if (ins.error && isColumnMissing(ins.error.message, "storage_path")) {
-    ins = await supabase.from("documents").insert(withFilePath);
-
-    if (ins.error && isColumnMissing(ins.error.message, "owner_id")) {
-      delete withFilePath.owner_id;
-      ins = await supabase.from("documents").insert(withFilePath);
+export async function POST(req: Request, ctx: Ctx) {
+  try {
+    if (!(await isEntityUser())) {
+      return NextResponse.json({ ok: false, error: "Sem permissão." }, { status: 403 });
     }
-  }
 
-  if (ins.error) {
-    return NextResponse.json({ ok: false, error: ins.error.message }, { status: 500 });
-  }
+    const { id: appId } = await ctx.params;
 
-  return NextResponse.json({ ok: true });
+    const supabase = await createClient();
+
+    const {
+      data: { user },
+      error: userErr,
+    } = await supabase.auth.getUser();
+
+    if (userErr || !user) {
+      return NextResponse.json({ ok: false, error: "Não autenticado." }, { status: 401 });
+    }
+
+    const body = await req.json().catch(() => ({}));
+
+    const document_type_id = String(body?.document_type_id ?? "").trim();
+    const storage_path = String(body?.storage_path ?? "").trim();
+    const original_name = String(body?.original_name ?? "").trim();
+
+    const mime_type = body?.mime_type != null ? String(body.mime_type) : null;
+    const size_bytes = body?.size_bytes != null ? Number(body.size_bytes) : null;
+
+    if (!document_type_id) {
+      return NextResponse.json({ ok: false, error: "document_type_id é obrigatório." }, { status: 400 });
+    }
+    if (!storage_path) {
+      return NextResponse.json({ ok: false, error: "storage_path é obrigatório." }, { status: 400 });
+    }
+    if (!original_name) {
+      return NextResponse.json({ ok: false, error: "original_name é obrigatório." }, { status: 400 });
+    }
+
+    // obter entity_id do utilizador
+    const { data: profile, error: profErr } = await supabase
+      .from("profiles")
+      .select("entity_id")
+      .eq("id", user.id)
+      .single();
+
+    if (profErr) {
+      return NextResponse.json({ ok: false, error: profErr.message }, { status: 400 });
+    }
+
+    const entityId = profile?.entity_id;
+    if (!entityId) {
+      return NextResponse.json({ ok: false, error: "Utilizador sem entidade associada." }, { status: 403 });
+    }
+
+    // garantir que o pedido é desta entidade
+    const { data: app, error: appErr } = await supabase
+      .from("applications")
+      .select("id, entity_id, is_deleted")
+      .eq("id", appId)
+      .single();
+
+    if (appErr || !app) {
+      return NextResponse.json({ ok: false, error: "Pedido não encontrado." }, { status: 404 });
+    }
+    if (app.is_deleted) {
+      return NextResponse.json({ ok: false, error: "Pedido eliminado." }, { status: 400 });
+    }
+    if (app.entity_id !== entityId) {
+      return NextResponse.json({ ok: false, error: "Sem permissão para este pedido." }, { status: 403 });
+    }
+
+    // inserir documento (campos coerentes com policies + schema)
+    const insertRow = {
+      owner_type: "APPLICATION",
+      owner_id: appId,
+      application_id: appId,
+      entity_id: entityId,
+
+      document_type_id,
+      storage_path,
+
+      original_name,
+      file_name: original_name, // opcional, mas útil (tens ambos)
+      mime_type,
+      size_bytes,
+
+      uploaded_by: user.id,
+      is_deleted: false,
+      status: "PENDING",
+      // phase tem default CANDIDACY; não mexo aqui
+      // scope é enum/nullable; deixo default/null para não rebentar por tipos
+    };
+
+    const { data: created, error: insErr } = await supabase
+      .from("documents")
+      .insert(insertRow)
+      .select("id")
+      .single();
+
+    if (insErr) {
+      return NextResponse.json({ ok: false, error: insErr.message }, { status: 400 });
+    }
+
+    return NextResponse.json({ ok: true, id: created.id });
+  } catch (e: any) {
+    return NextResponse.json({ ok: false, error: e?.message ?? "Erro inesperado." }, { status: 500 });
+  }
 }
