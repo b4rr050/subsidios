@@ -15,7 +15,7 @@ type Doc = {
   review_comment: string | null;
 };
 
-type DocType = { id: string; name: string; scope: string };
+type DocType = { id: string; name: string };
 
 export default function BackofficeAppClient({
   app,
@@ -99,6 +99,7 @@ export default function BackofficeAppClient({
 
   return (
     <div className="grid gap-6">
+      {/* DADOS + AÇÕES */}
       <section className="rounded-2xl border p-4 shadow-sm">
         <div className="flex items-center justify-between">
           <h2 className="font-medium">Dados</h2>
@@ -202,6 +203,7 @@ export default function BackofficeAppClient({
         </div>
       </section>
 
+      {/* HISTÓRICO */}
       <section className="rounded-2xl border p-4 shadow-sm">
         <h2 className="font-medium mb-3">Histórico de estados</h2>
         <div className="overflow-auto">

@@ -11,11 +11,7 @@ async function isTechOrAdmin() {
   return a.data === true || t.data === true;
 }
 
-export default async function BackofficeApplicationDetailPage({
-  params,
-}: {
-  params: ParamsPromise;
-}) {
+export default async function BackofficeApplicationDetailPage({ params }: { params: ParamsPromise }) {
   if (!(await isTechOrAdmin())) redirect("/unauthorized");
 
   const { id: appId } = await params;
@@ -53,21 +49,21 @@ export default async function BackofficeApplicationDetailPage({
 
   const { data: statusHistory } = await supabase
     .from("application_status_history")
-    .select("id, from_status, to_status, changed_at, changed_by, comment")
+    .select("id, from_status, to_status, changed_at, comment")
     .eq("application_id", appId)
     .order("changed_at", { ascending: false })
     .limit(50);
 
   const { data: changeLog } = await supabase
     .from("application_change_log")
-    .select("id, field, old_value, new_value, changed_at, changed_by")
+    .select("id, field, old_value, new_value, changed_at")
     .eq("application_id", appId)
     .order("changed_at", { ascending: false })
     .limit(200);
 
   const { data: docTypes } = await supabase
     .from("document_types")
-    .select("id, name, scope")
+    .select("id, name")
     .eq("is_active", true)
     .order("name");
 

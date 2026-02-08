@@ -26,15 +26,14 @@ export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string
   const parsed = BodySchema.safeParse(json);
   if (!parsed.success) return NextResponse.json({ ok: false, error: "Invalid payload" }, { status: 400 });
 
-  const { data: doc } = await supabase
+  const { data: doc, error: docErr } = await supabase
     .from("documents")
     .select("id, status, is_deleted")
     .eq("id", docId)
     .single();
 
-  if (!doc || doc.is_deleted) return NextResponse.json({ ok: false, error: "Not found" }, { status: 404 });
+  if (docErr || !doc || doc.is_deleted) return NextResponse.json({ ok: false, error: "Not found" }, { status: 404 });
 
-  // Só rever se ainda estiver PENDING
   if (doc.status !== "PENDING") {
     return NextResponse.json({ ok: false, error: "Este documento já foi revisto." }, { status: 409 });
   }
