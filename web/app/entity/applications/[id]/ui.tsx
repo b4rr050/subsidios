@@ -21,46 +21,53 @@ type DocRow = {
 
 type App = {
   id: string;
+  entity_id: string;
+  category_id: string | null;
   object_title: string;
-  object_normalized?: string | null;
   requested_amount: number | null;
   current_status: string;
-  category_id: string | null;
+  created_at?: string | null;
+  updated_at?: string | null;
+  origin?: string | null;
 };
 
 type Category = { id: string; name: string };
-type Hist = { id: string; from_status: string | null; to_status: string; changed_at: string; comment: string | null };
+
+type Hist = {
+  id: string;
+  from_status: string | null;
+  to_status: string;
+  changed_at: string;
+  comment: string | null;
+};
+
+type DebugDocTypes = {
+  totalActive: number;
+  applicationActive: number;
+  error: string | null;
+};
 
 function money(v: any) {
   const n = Number(v ?? 0);
   return `${n.toFixed(2)} €`;
 }
 
-export default function EntityApplicationClient({
+export default function ApplicationClient({
   application,
   categories,
-  documents,
-  documentTypes,
   history,
-
-  // ✅ props extra que o teu page.tsx já passa
   entityId,
+  documentTypes,
+  documents,
   debugDocTypes,
 }: {
   application: App;
   categories: Category[];
-  documents: DocRow[];
-  documentTypes: DocType[];
   history: Hist[];
-
-  // ✅ aceitamos para não dar erro de TS, mesmo que não uses já
-  entityId?: string | null;
-  debugDocTypes?: {
-    total?: number;
-    active?: number;
-    byScope?: Record<string, number>;
-    scopes?: string[];
-  };
+  entityId: string;
+  documentTypes: DocType[];
+  documents: DocRow[];
+  debugDocTypes: DebugDocTypes;
 }) {
   const router = useRouter();
   const supabase = createClient();
@@ -94,16 +101,19 @@ export default function EntityApplicationClient({
   async function openDoc(d: DocRow) {
     setDocMsg(null);
     const path = d.storage_path ?? d.file_path ?? null;
+
     if (!path) {
       setDocMsg("Documento sem caminho no storage.");
       return;
     }
 
     const { data, error } = await supabase.storage.from("docs").createSignedUrl(path, 60);
+
     if (error || !data?.signedUrl) {
       setDocMsg(error?.message ?? "Erro a abrir documento.");
       return;
     }
+
     window.open(data.signedUrl, "_blank", "noopener,noreferrer");
   }
 
@@ -177,6 +187,7 @@ export default function EntityApplicationClient({
 
     setLoading(true);
 
+    // Upload ao storage
     const safeName = file.name.replace(/[^\w.\-() ]+/g, "_");
     const storagePath = `applications/${application.id}/${Date.now()}_${safeName}`;
 
@@ -192,6 +203,7 @@ export default function EntityApplicationClient({
       return;
     }
 
+    // Registo na tabela documents
     const res = await fetch(`/api/entity/applications/${application.id}/documents/create`, {
       method: "POST",
       headers: { "content-type": "application/json" },
@@ -249,17 +261,20 @@ export default function EntityApplicationClient({
 
   return (
     <div className="space-y-6">
+      {/* Pedido */}
       <section className="rounded-2xl border p-4 shadow-sm">
         <div className="flex items-start justify-between gap-4">
-          <div>
+          <div className="space-y-1">
             <h2 className="font-medium">Pedido</h2>
-            <p className="text-xs text-neutral-500 mt-1">
-              ID pedido: {application.id}
-              {entityId ? ` • Entity: ${entityId}` : ""}
+            <p className="text-xs text-neutral-500">
+              ID: {application.id} • Origem: {application.origin ?? "-"}
             </p>
             <p className="text-xs text-neutral-500">
-              Valor atual: {money(application.requested_amount)}
+              Criado: {application.created_at ? new Date(application.created_at).toLocaleString() : "-"} • Atualizado:{" "}
+              {application.updated_at ? new Date(application.updated_at).toLocaleString() : "-"}
             </p>
+            {/* entityId só para consistência/debug (não precisa de aparecer muito) */}
+            <p className="text-[11px] text-neutral-400">Entidade: {entityId}</p>
           </div>
 
           <span className="text-sm rounded-md border px-2 py-1">{status}</span>
@@ -295,7 +310,7 @@ export default function EntityApplicationClient({
           </div>
 
           <div className="space-y-1">
-            <label className="text-sm">Valor solicitado (€)</label>
+            <label className="text-sm">Valor solicitado</label>
             <input
               className="w-full rounded-md border px-3 py-2"
               value={requestedAmount}
@@ -304,6 +319,7 @@ export default function EntityApplicationClient({
               inputMode="decimal"
               placeholder="0"
             />
+            <p className="text-xs text-neutral-500">Atual: {money(application.requested_amount)}</p>
           </div>
 
           <div className="flex gap-2">
@@ -340,14 +356,14 @@ export default function EntityApplicationClient({
           {msg && <p className="text-sm mt-2">{msg}</p>}
         </form>
 
-        {/* Debug opcional (se já estavas a passar isto, mostramos de forma discreta) */}
-        {debugDocTypes?.total != null && (
-          <p className="mt-3 text-xs text-neutral-500">
-            Tipos: {debugDocTypes.active ?? "-"} ativos / {debugDocTypes.total ?? "-"} total
-          </p>
-        )}
+        {/* Debug dos doc types (discreto) */}
+        <p className="mt-3 text-xs text-neutral-500">
+          Tipos ativos: {debugDocTypes.applicationActive} | APPLICATION: {debugDocTypes.applicationActive}
+          {debugDocTypes.error ? ` | Erro: ${debugDocTypes.error}` : ""}
+        </p>
       </section>
 
+      {/* Documentos */}
       <section className="rounded-2xl border p-4 shadow-sm">
         <h2 className="font-medium">Documentos (Candidatura)</h2>
 
@@ -398,7 +414,6 @@ export default function EntityApplicationClient({
                 <th className="py-2">Estado</th>
                 <th className="py-2">Comentário</th>
                 <th className="py-2">Data</th>
-                <th className="py-2">Ações</th>
               </tr>
             </thead>
             <tbody>
@@ -413,14 +428,11 @@ export default function EntityApplicationClient({
                   <td className="py-2">{d.status}</td>
                   <td className="py-2">{d.review_comment ?? "-"}</td>
                   <td className="py-2">{d.uploaded_at ? new Date(d.uploaded_at).toLocaleString() : "-"}</td>
-                  <td className="py-2">
-                    <span className="text-xs text-neutral-500">—</span>
-                  </td>
                 </tr>
               ))}
               {documents.length === 0 && (
                 <tr>
-                  <td className="py-3 text-neutral-600" colSpan={5}>
+                  <td className="py-3 text-neutral-600" colSpan={4}>
                     Ainda não existem documentos.
                   </td>
                 </tr>
@@ -430,6 +442,7 @@ export default function EntityApplicationClient({
         </div>
       </section>
 
+      {/* Histórico de estados */}
       <section className="rounded-2xl border p-4 shadow-sm">
         <h2 className="font-medium mb-3">Histórico de estados</h2>
         <div className="overflow-auto">
