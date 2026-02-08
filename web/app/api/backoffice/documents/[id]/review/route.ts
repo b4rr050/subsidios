@@ -1,11 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { z } from "zod";
 import { createClient } from "@/lib/supabase/server";
-
-const BodySchema = z.object({
-  decision: z.enum(["APPROVE", "REJECT"]),
-  comment: z.string().optional().nullable(),
-});
 
 function isColumnMissing(errMsg: string | undefined | null, col: string) {
   if (!errMsg) return false;
@@ -13,37 +7,70 @@ function isColumnMissing(errMsg: string | undefined | null, col: string) {
   return m.includes("column") && m.includes(col.toLowerCase());
 }
 
+function parseDecision(body: any): { status: "APPROVED" | "REJECTED"; comment: string | null } | null {
+  if (!body || typeof body !== "object") return null;
+
+  // Formato 1 (o que eu tinha): { decision: "APPROVE" | "REJECT", comment? }
+  if (typeof body.decision === "string") {
+    const d = body.decision.toUpperCase();
+    const status = d === "APPROVE" ? "APPROVED" : d === "REJECT" ? "REJECTED" : null;
+    if (!status) return null;
+    const c = typeof body.comment === "string" ? body.comment.trim() : "";
+    return { status, comment: c.length ? c : null };
+  }
+
+  // Formato 2: { status: "APPROVED" | "REJECTED", comment? }
+  if (typeof body.status === "string") {
+    const s = body.status.toUpperCase();
+    if (s !== "APPROVED" && s !== "REJECTED") return null;
+    const c = typeof body.comment === "string" ? body.comment.trim() : "";
+    return { status: s, comment: c.length ? c : null };
+  }
+
+  // Formato 3: { approve: true } / { reject: true }
+  if (body.approve === true) return { status: "APPROVED", comment: null };
+  if (body.reject === true) {
+    const c = typeof body.comment === "string" ? body.comment.trim() : "";
+    return { status: "REJECTED", comment: c.length ? c : null };
+  }
+
+  return null;
+}
+
 export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string }> }) {
   const { id: documentId } = await ctx.params;
-  const supabase = await createClient();
 
+  const supabase = await createClient();
   const {
     data: { user },
   } = await supabase.auth.getUser();
 
   if (!user) return NextResponse.json({ ok: false, error: "Not authenticated" }, { status: 401 });
 
-  // TECH ou ADMIN pode rever (ajusta se também quiseres PRESIDENT)
+  // TECH ou ADMIN
   const isTech = await supabase.rpc("has_role", { role: "TECH" });
   const isAdmin = await supabase.rpc("has_role", { role: "ADMIN" });
   if (isTech.data !== true && isAdmin.data !== true) {
     return NextResponse.json({ ok: false, error: "Forbidden" }, { status: 403 });
   }
 
-  const json = await req.json().catch(() => null);
-  const parsed = BodySchema.safeParse(json);
-  if (!parsed.success) return NextResponse.json({ ok: false, error: "Invalid payload" }, { status: 400 });
+  const body = await req.json().catch(() => null);
+  const parsed = parseDecision(body);
 
-  const status = parsed.data.decision === "APPROVE" ? "APPROVED" : "REJECTED";
-  const comment = (parsed.data.comment ?? "").trim();
-  if (status === "REJECTED" && comment.length === 0) {
+  if (!parsed) {
+    return NextResponse.json(
+      { ok: false, error: "Payload inválido. Envia {decision:'APPROVE'|'REJECT', comment?} ou {status:'APPROVED'|'REJECTED', comment?}." },
+      { status: 400 }
+    );
+  }
+
+  if (parsed.status === "REJECTED" && (!parsed.comment || parsed.comment.trim().length === 0)) {
     return NextResponse.json({ ok: false, error: "Comentário obrigatório na rejeição." }, { status: 400 });
   }
 
-  // tentar update com colunas de auditoria (se existirem)
   const baseUpdate: any = {
-    status,
-    review_comment: comment.length ? comment : null,
+    status: parsed.status,
+    review_comment: parsed.comment,
     reviewed_by: user.id,
     reviewed_at: new Date().toISOString(),
   };
