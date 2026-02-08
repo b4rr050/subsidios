@@ -4,14 +4,7 @@ import { useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
 import { createClient } from "@/lib/supabase/client";
 
-type Category = { id: string; name: string };
-
-type DocType = {
-  id: string;
-  name: string;
-  scope?: string | null;
-  is_active?: boolean | null;
-};
+type DocType = { id: string; name: string; scope?: string | null; is_active?: boolean | null };
 
 type DocRow = {
   id: string;
@@ -26,71 +19,85 @@ type DocRow = {
   review_comment: string | null;
 };
 
-
 type App = {
   id: string;
-  category_id: string;
   object_title: string;
+  object_normalized?: string | null;
   requested_amount: number | null;
   current_status: string;
-  origin: string;
+  category_id: string | null;
 };
 
-type Hist = {
-  id: string;
-  from_status: string | null;
-  to_status: string;
-  changed_at: string;
-  comment: string | null;
-};
+type Category = { id: string; name: string };
+type Hist = { id: string; from_status: string | null; to_status: string; changed_at: string; comment: string | null };
 
-function canEdit(status: string) {
-  return ["S1_DRAFT", "S2_SUBMITTED", "S3_IN_REVIEW", "S4_RETURNED"].includes(status);
-}
-function canSubmit(status: string) {
-  return status === "S1_DRAFT" || status === "S4_RETURNED";
-}
-function canUploadDocs(status: string) {
-  return canEdit(status);
+function money(v: any) {
+  const n = Number(v ?? 0);
+  return `${n.toFixed(2)} €`;
 }
 
-export default function ApplicationClient({
+export default function EntityApplicationClient({
   application,
   categories,
-  history,
-  entityId,
-  documentTypes,
   documents,
-  debugDocTypes,
+  documentTypes,
+  history,
 }: {
   application: App;
   categories: Category[];
-  history: Hist[];
-  entityId: string;
-  documentTypes: DocType[];
   documents: DocRow[];
-  debugDocTypes?: { totalActive: number; applicationActive: number; error: string | null };
+  documentTypes: DocType[];
+  history: Hist[];
 }) {
   const router = useRouter();
   const supabase = createClient();
 
   const [categoryId, setCategoryId] = useState(application.category_id ?? "");
-  const [title, setTitle] = useState(application.object_title ?? "");
-  const [amount, setAmount] = useState(String(application.requested_amount ?? 0));
+  const [objectTitle, setObjectTitle] = useState(application.object_title ?? "");
+  const [requestedAmount, setRequestedAmount] = useState<string>(
+    application.requested_amount != null ? String(application.requested_amount) : ""
+  );
 
-  const [loading, setLoading] = useState(false);
-  const [msg, setMsg] = useState<string | null>(null);
-
-  const [docTypeId, setDocTypeId] = useState(documentTypes[0]?.id ?? "");
+  const [docTypeId, setDocTypeId] = useState<string>("");
   const [file, setFile] = useState<File | null>(null);
+
+  const [msg, setMsg] = useState<string | null>(null);
   const [docMsg, setDocMsg] = useState<string | null>(null);
+  const [loading, setLoading] = useState(false);
+  const [deleting, setDeleting] = useState(false);
 
-  const editable = useMemo(() => canEdit(application.current_status), [application.current_status]);
-  const submittable = useMemo(() => canSubmit(application.current_status), [application.current_status]);
-  const uploadable = useMemo(() => canUploadDocs(application.current_status), [application.current_status]);
+  const status = application.current_status;
 
-  async function save(e: React.FormEvent) {
+  const docTypeNameById = useMemo(() => {
+    const m: Record<string, string> = {};
+    for (const t of documentTypes ?? []) m[t.id] = t.name;
+    return m;
+  }, [documentTypes]);
+
+  const canEditCore = status === "S1_DRAFT" || status === "S4_RETURNED";
+  const canUploadApplicationDocs = status === "S1_DRAFT" || status === "S4_RETURNED";
+  const canDeleteDraft = status === "S1_DRAFT";
+
+  async function openDoc(d: DocRow) {
+    setDocMsg(null);
+    const path = d.storage_path ?? d.file_path ?? null;
+    if (!path) {
+      setDocMsg("Documento sem caminho no storage.");
+      return;
+    }
+
+    const { data, error } = await supabase.storage.from("docs").createSignedUrl(path, 60);
+    if (error || !data?.signedUrl) {
+      setDocMsg(error?.message ?? "Erro a abrir documento.");
+      return;
+    }
+    window.open(data.signedUrl, "_blank", "noopener,noreferrer");
+  }
+
+  async function onSave(e: React.FormEvent) {
     e.preventDefault();
+    if (!canEditCore) return;
+
     setMsg(null);
     setLoading(true);
 
@@ -98,9 +105,9 @@ export default function ApplicationClient({
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify({
-        category_id: categoryId,
-        object_title: title,
-        requested_amount: amount,
+        category_id: categoryId || null,
+        object_title: objectTitle,
+        requested_amount: requestedAmount ? Number(requestedAmount) : null,
       }),
     });
 
@@ -108,57 +115,46 @@ export default function ApplicationClient({
     setLoading(false);
 
     if (!res.ok || data?.ok !== true) {
-      setMsg(data?.error ?? "Erro ao guardar");
+      setMsg(data?.error ?? "Erro ao guardar.");
       return;
     }
 
-    setMsg("Guardado.");
+    setMsg("Guardado com sucesso.");
     router.refresh();
   }
 
-  async function submit() {
+  async function onSubmitApplication() {
     setMsg(null);
     setLoading(true);
 
-    const res = await fetch(`/api/entity/applications/${application.id}/submit`, { method: "POST" });
+    const res = await fetch(`/api/entity/applications/${application.id}/submit`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({}),
+    });
+
     const data = await res.json().catch(() => ({}));
     setLoading(false);
 
     if (!res.ok || data?.ok !== true) {
-      setMsg(data?.error ?? "Erro ao submeter");
+      setMsg(data?.error ?? "Erro ao submeter pedido.");
       return;
     }
 
-    setMsg("Submetido.");
+    setMsg("Pedido submetido.");
     router.refresh();
   }
 
-  async function openDoc(d: DocRow) {
-  const path = d.storage_path ?? d.file_path ?? null;
-  if (!path) {
-    setDocMsg("Documento sem path (storage_path/file_path). Contacta o admin.");
-    return;
-  }
-
-  const { data, error } = await supabase.storage.from("docs").createSignedUrl(path, 60);
-  if (error || !data?.signedUrl) {
-    setDocMsg(error?.message ?? "Erro a gerar link para abrir documento.");
-    return;
-  }
-  window.open(data.signedUrl, "_blank", "noopener,noreferrer");
-}
-
-
-  async function uploadDocument(e: React.FormEvent) {
+  async function onUploadDoc(e: React.FormEvent) {
     e.preventDefault();
     setDocMsg(null);
 
-    if (!uploadable) {
-      setDocMsg("Upload bloqueado: pedido já foi validado tecnicamente (ou está fora da fase).");
+    if (!canUploadApplicationDocs) {
+      setDocMsg("Não é possível anexar documentos neste estado.");
       return;
     }
     if (!docTypeId) {
-      setDocMsg("Escolhe o tipo de documento.");
+      setDocMsg("Seleciona o tipo de documento.");
       return;
     }
     if (!file) {
@@ -168,10 +164,12 @@ export default function ApplicationClient({
 
     setLoading(true);
 
+    // 1) upload ao storage
+    const ext = file.name.includes(".") ? file.name.split(".").pop() : "bin";
     const safeName = file.name.replace(/[^\w.\-() ]+/g, "_");
-    const filePath = `entities/${entityId}/applications/${application.id}/${docTypeId}/${crypto.randomUUID()}-${safeName}`;
+    const storagePath = `applications/${application.id}/${Date.now()}_${safeName}`;
 
-    const up = await supabase.storage.from("docs").upload(filePath, file, {
+    const up = await supabase.storage.from("docs").upload(storagePath, file, {
       cacheControl: "3600",
       upsert: false,
       contentType: file.type || undefined,
@@ -183,14 +181,15 @@ export default function ApplicationClient({
       return;
     }
 
+    // 2) gravar registo em documents
     const res = await fetch(`/api/entity/applications/${application.id}/documents/create`, {
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify({
         document_type_id: docTypeId,
-        file_path: filePath,
+        storage_path: storagePath,
         original_name: file.name,
-        mime_type: file.type ?? null,
+        mime_type: file.type || null,
         size_bytes: file.size ?? null,
       }),
     });
@@ -203,32 +202,64 @@ export default function ApplicationClient({
       return;
     }
 
+    setDocMsg("Documento submetido.");
     setFile(null);
-    setDocMsg("Documento submetido (PENDING).");
+    setDocTypeId("");
+    router.refresh();
+  }
+
+  async function onDeleteDraft() {
+    if (!canDeleteDraft) return;
+
+    const ok1 = window.confirm("Eliminar este pedido em rascunho? (não pode ser recuperado pela entidade)");
+    if (!ok1) return;
+
+    const ok2 = window.confirm("Confirma: queres mesmo ELIMINAR este rascunho?");
+    if (!ok2) return;
+
+    setDeleting(true);
+
+    const res = await fetch(`/api/entity/applications/${application.id}/delete`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({}),
+    });
+
+    const data = await res.json().catch(() => ({}));
+    setDeleting(false);
+
+    if (!res.ok || data?.ok !== true) {
+      setMsg(data?.error ?? "Erro ao eliminar rascunho.");
+      return;
+    }
+
+    router.replace("/entity");
     router.refresh();
   }
 
   return (
-    <div className="grid gap-6">
-      {/* DADOS */}
+    <div className="space-y-6">
+      {/* Dados do pedido */}
       <section className="rounded-2xl border p-4 shadow-sm">
-        <div className="flex items-center justify-between">
-          <h2 className="font-medium">Dados do pedido</h2>
-          <span className="text-sm rounded-md border px-2 py-1">{application.current_status}</span>
+        <div className="flex items-start justify-between gap-4">
+          <div>
+            <h2 className="font-medium">Dados do pedido</h2>
+            <p className="text-xs text-neutral-500 mt-1">ID: {application.id}</p>
+          </div>
+
+          <span className="text-sm rounded-md border px-2 py-1">{status}</span>
         </div>
 
-        <form onSubmit={save} className="mt-4 grid gap-3 max-w-2xl">
-          <div className="grid gap-2">
+        <form onSubmit={onSave} className="mt-4 space-y-3">
+          <div className="space-y-1">
             <label className="text-sm">Categoria</label>
             <select
-              className="rounded-md border px-3 py-2"
+              className="w-full rounded-md border px-3 py-2"
               value={categoryId}
               onChange={(e) => setCategoryId(e.target.value)}
-              disabled={!editable || loading}
+              disabled={!canEditCore}
             >
-              <option value="" disabled>
-                Selecionar…
-              </option>
+              <option value="">(Sem categoria)</option>
               {categories.map((c) => (
                 <option key={c.id} value={c.id}>
                   {c.name}
@@ -237,113 +268,109 @@ export default function ApplicationClient({
             </select>
           </div>
 
-          <div className="grid gap-2">
+          <div className="space-y-1">
             <label className="text-sm">Título / Objeto</label>
             <input
-              className="rounded-md border px-3 py-2"
-              value={title}
-              onChange={(e) => setTitle(e.target.value)}
-              disabled={!editable || loading}
+              className="w-full rounded-md border px-3 py-2"
+              value={objectTitle}
+              onChange={(e) => setObjectTitle(e.target.value)}
+              disabled={!canEditCore}
+              required
             />
           </div>
 
-          <div className="grid gap-2">
+          <div className="space-y-1">
             <label className="text-sm">Valor solicitado (€)</label>
             <input
-              className="rounded-md border px-3 py-2"
-              value={amount}
-              onChange={(e) => setAmount(e.target.value)}
+              className="w-full rounded-md border px-3 py-2"
+              value={requestedAmount}
+              onChange={(e) => setRequestedAmount(e.target.value)}
+              disabled={!canEditCore}
               inputMode="decimal"
-              disabled={!editable || loading}
+              placeholder="0"
             />
           </div>
 
-          {msg && <p className="text-sm">{msg}</p>}
-
-          <div className="flex gap-3">
-            <button className="rounded-md border px-3 py-2 text-sm disabled:opacity-60" disabled={!editable || loading}>
+          <div className="flex gap-2">
+            <button
+              type="submit"
+              className="rounded-md border px-3 py-2 text-sm disabled:opacity-60"
+              disabled={!canEditCore || loading}
+            >
               {loading ? "A guardar..." : "Guardar"}
             </button>
 
             <button
               type="button"
               className="rounded-md bg-black px-3 py-2 text-sm text-white disabled:opacity-60"
-              disabled={!submittable || loading}
-              onClick={submit}
+              disabled={loading || status !== "S1_DRAFT"}
+              onClick={onSubmitApplication}
             >
-              {loading ? "A submeter..." : "Submeter"}
+              {loading ? "..." : "Submeter"}
+            </button>
+
+            <div className="flex-1" />
+
+            {/* ✅ Eliminar rascunho */}
+            <button
+              type="button"
+              className="rounded-md border px-3 py-2 text-sm text-red-700 disabled:opacity-60"
+              disabled={!canDeleteDraft || deleting}
+              onClick={onDeleteDraft}
+              title="Só disponível em S1_DRAFT"
+            >
+              {deleting ? "A eliminar..." : "Eliminar rascunho"}
             </button>
           </div>
+
+          {msg && <p className="text-sm mt-2">{msg}</p>}
         </form>
       </section>
 
-      {/* DOCUMENTOS */}
+      {/* Documentos (Candidatura) */}
       <section className="rounded-2xl border p-4 shadow-sm">
         <h2 className="font-medium">Documentos (Candidatura)</h2>
 
-        {/* DEBUG */}
-        {debugDocTypes?.error && (
-          <p className="mt-2 text-xs text-red-600">Erro a carregar tipos: {debugDocTypes.error}</p>
-        )}
-        <p className="mt-2 text-xs text-neutral-600">
-          Tipos ativos: {debugDocTypes?.totalActive ?? "-"} | APPLICATION: {debugDocTypes?.applicationActive ?? "-"}
-        </p>
-
-        <form onSubmit={uploadDocument} className="mt-4 grid gap-3 max-w-2xl">
-          <div className="grid gap-2">
+        <form onSubmit={onUploadDoc} className="mt-4 space-y-3">
+          <div className="space-y-1">
             <label className="text-sm">Tipo de documento</label>
             <select
-              className="rounded-md border px-3 py-2"
+              className="w-full rounded-md border px-3 py-2"
               value={docTypeId}
               onChange={(e) => setDocTypeId(e.target.value)}
-              disabled={!uploadable || loading || documentTypes.length === 0}
+              disabled={!canUploadApplicationDocs || loading}
             >
-              {documentTypes.length === 0 ? (
-                <option value="">(Sem tipos configurados)</option>
-              ) : (
-                documentTypes.map((t) => (
-                  <option key={t.id} value={t.id}>
-                    {t.name}
-                  </option>
-                ))
-              )}
+              <option value="">{documentTypes.length ? "(Selecionar)" : "(Sem tipos configurados)"}</option>
+              {documentTypes.map((t) => (
+                <option key={t.id} value={t.id}>
+                  {t.name}
+                </option>
+              ))}
             </select>
-
-            {documentTypes.length === 0 && (
-              <p className="text-xs text-red-600">
-                Não existem tipos de documento configurados (APPLICATION). Contacta o administrador.
-              </p>
-            )}
           </div>
 
-          <div className="grid gap-2">
+          <div className="space-y-1">
             <label className="text-sm">Ficheiro</label>
             <input
+              className="w-full rounded-md border px-3 py-2"
               type="file"
-              className="rounded-md border px-3 py-2 text-sm"
               onChange={(e) => setFile(e.target.files?.[0] ?? null)}
-              disabled={!uploadable || loading || documentTypes.length === 0}
+              disabled={!canUploadApplicationDocs || loading}
             />
           </div>
 
-          {docMsg && <p className="text-sm">{docMsg}</p>}
-
           <button
             type="submit"
-            className="rounded-md bg-black px-3 py-2 text-sm text-white disabled:opacity-60"
-            disabled={!uploadable || loading || documentTypes.length === 0}
+            className="w-full rounded-md bg-black px-3 py-2 text-sm text-white disabled:opacity-60"
+            disabled={!canUploadApplicationDocs || loading}
           >
             {loading ? "A enviar..." : "Enviar documento"}
           </button>
 
-          {!uploadable && (
-            <p className="text-xs text-neutral-600">
-              Upload bloqueado: pedido já não está numa fase aberta. Pede reabertura ao técnico.
-            </p>
-          )}
+          {docMsg && <p className="text-sm mt-2">{docMsg}</p>}
         </form>
 
-        <div className="mt-6 overflow-auto">
+        <div className="mt-4 overflow-auto">
           <table className="min-w-[900px] w-full text-sm">
             <thead>
               <tr className="text-left border-b">
@@ -357,14 +384,17 @@ export default function ApplicationClient({
             <tbody>
               {documents.map((d) => (
                 <tr key={d.id} className="border-b">
-                  <td className="py-2">{d.original_name}</td>
+                  <td className="py-2">
+                    <button className="underline" type="button" onClick={() => openDoc(d)}>
+                      {d.original_name}
+                    </button>
+                    <div className="text-xs text-neutral-500">{docTypeNameById[d.document_type_id] ?? "-"}</div>
+                  </td>
                   <td className="py-2">{d.status}</td>
                   <td className="py-2">{d.review_comment ?? "-"}</td>
                   <td className="py-2">{d.uploaded_at ? new Date(d.uploaded_at).toLocaleString() : "-"}</td>
                   <td className="py-2">
-                    <button className="underline" type="button" onClick={() => openDoc(d)}>
-                      Abrir
-                    </button>
+                    <span className="text-xs text-neutral-500">—</span>
                   </td>
                 </tr>
               ))}
@@ -380,7 +410,7 @@ export default function ApplicationClient({
         </div>
       </section>
 
-      {/* HISTÓRICO */}
+      {/* Histórico de estados */}
       <section className="rounded-2xl border p-4 shadow-sm">
         <h2 className="font-medium mb-3">Histórico de estados</h2>
         <div className="overflow-auto">

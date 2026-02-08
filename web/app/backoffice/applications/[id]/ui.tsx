@@ -19,12 +19,23 @@ type DocRow = {
   review_comment: string | null;
 };
 
+type ReviewRow = {
+  id: string;
+  document_id: string;
+  decision: "APPROVED" | "REJECTED";
+  comment: string | null;
+  decided_by: string;
+  decided_at: string;
+};
+
 type App = {
   id: string;
   object_title: string;
   requested_amount: number | null;
   current_status: string;
-  origin: string;
+  origin: string | null;
+  created_at?: string | null;
+  updated_at?: string | null;
 };
 
 type Entity = { id: string; name: string; nif: string };
@@ -38,6 +49,11 @@ type Hist = {
   comment: string | null;
 };
 
+function money(v: any) {
+  const n = Number(v ?? 0);
+  return `${n.toFixed(2)} €`;
+}
+
 export default function BackofficeApplicationClient({
   application,
   entity,
@@ -45,6 +61,8 @@ export default function BackofficeApplicationClient({
   history,
   documents,
   documentTypes,
+  reviewHistory,
+  reviewerById,
 }: {
   application: App;
   entity: Entity | null;
@@ -52,11 +70,12 @@ export default function BackofficeApplicationClient({
   history: Hist[];
   documents: DocRow[];
   documentTypes: DocType[];
+  reviewHistory: ReviewRow[];
+  reviewerById: Record<string, { email?: string | null; full_name?: string | null }>;
 }) {
   const router = useRouter();
   const supabase = createClient();
 
-  const [msg, setMsg] = useState<string | null>(null);
   const [docMsg, setDocMsg] = useState<string | null>(null);
   const [loadingId, setLoadingId] = useState<string | null>(null);
 
@@ -66,13 +85,18 @@ export default function BackofficeApplicationClient({
     return m;
   }, [documentTypes]);
 
+  const docNameById = useMemo(() => {
+    const m: Record<string, string> = {};
+    for (const d of documents ?? []) m[d.id] = d.original_name;
+    return m;
+  }, [documents]);
+
   async function openDoc(d: DocRow) {
     setDocMsg(null);
     const path = d.storage_path ?? d.file_path ?? null;
 
-    // ✅ guard — evita o crash do SDK
     if (!path) {
-      setDocMsg("Documento sem path (storage_path/file_path). Foi gravado incompleto. Re-submete ou corrige registo.");
+      setDocMsg("Documento sem caminho no storage. Re-submete ou corrige o registo.");
       return;
     }
 
@@ -87,7 +111,6 @@ export default function BackofficeApplicationClient({
   }
 
   async function review(doc: DocRow, decision: "APPROVE" | "REJECT") {
-    setMsg(null);
     setDocMsg(null);
 
     let comment: string | undefined = undefined;
@@ -106,12 +129,10 @@ export default function BackofficeApplicationClient({
     const res = await fetch(`/api/backoffice/documents/${doc.id}/review`, {
       method: "POST",
       headers: { "content-type": "application/json" },
-      // ✅ body compatível com a rota robusta
       body: JSON.stringify({ decision, comment }),
     });
 
     const data = await res.json().catch(() => ({}));
-
     setLoadingId(null);
 
     if (!res.ok || data?.ok !== true) {
@@ -119,7 +140,10 @@ export default function BackofficeApplicationClient({
       return;
     }
 
-    setDocMsg(decision === "APPROVE" ? "Documento aprovado." : "Documento rejeitado.");
+    // Nota: a API já pode devolver warning se auditoria falhar
+    if (data?.warning) setDocMsg(`OK, mas aviso: ${data.warning}`);
+    else setDocMsg(decision === "APPROVE" ? "Documento aprovado." : "Documento rejeitado (pedido devolvido à entidade).");
+
     router.refresh();
   }
 
@@ -127,28 +151,43 @@ export default function BackofficeApplicationClient({
     <div className="space-y-6">
       {/* Resumo */}
       <section className="rounded-2xl border p-4 shadow-sm">
-        <div className="flex items-center justify-between">
-          <div>
+        <div className="flex items-start justify-between gap-4">
+          <div className="space-y-1">
             <h2 className="font-medium">Resumo</h2>
-            <p className="text-sm text-neutral-600">{application.object_title}</p>
-            <p className="text-xs text-neutral-500">
-              {entity?.name ?? "Entidade"} {entity?.nif ? `• NIF ${entity.nif}` : ""}{" "}
-              {category?.name ? `• ${category.name}` : ""}
+            <p className="text-sm text-neutral-900">{application.object_title}</p>
+            <p className="text-xs text-neutral-600">
+              {entity?.name ?? "Entidade"} {entity?.nif ? `• NIF ${entity.nif}` : ""} {category?.name ? `• ${category.name}` : ""}
             </p>
+
+            <div className="mt-2 grid grid-cols-2 gap-x-6 gap-y-1 text-xs text-neutral-600">
+              <div>
+                <span className="text-neutral-500">Valor solicitado:</span> {money(application.requested_amount)}
+              </div>
+              <div>
+                <span className="text-neutral-500">Origem:</span> {application.origin ?? "-"}
+              </div>
+              <div>
+                <span className="text-neutral-500">Criado:</span>{" "}
+                {application.created_at ? new Date(application.created_at).toLocaleString() : "-"}
+              </div>
+              <div>
+                <span className="text-neutral-500">Atualizado:</span>{" "}
+                {application.updated_at ? new Date(application.updated_at).toLocaleString() : "-"}
+              </div>
+              <div className="col-span-2">
+                <span className="text-neutral-500">ID:</span> {application.id}
+              </div>
+            </div>
           </div>
+
           <span className="text-sm rounded-md border px-2 py-1">{application.current_status}</span>
         </div>
-
-        {msg && <p className="mt-3 text-sm">{msg}</p>}
       </section>
 
       {/* Documentos */}
       <section className="rounded-2xl border p-4 shadow-sm">
         <div className="flex items-center justify-between">
           <h2 className="font-medium">Documentos</h2>
-          <span className="text-xs text-neutral-500">
-            (TECH abre via storage_path; se faltar, aparece erro)
-          </span>
         </div>
 
         {docMsg && <p className="mt-3 text-sm">{docMsg}</p>}
@@ -212,7 +251,52 @@ export default function BackofficeApplicationClient({
         </div>
       </section>
 
-      {/* Histórico */}
+      {/* ✅ Histórico de revisões */}
+      <section className="rounded-2xl border p-4 shadow-sm">
+        <h2 className="font-medium mb-3">Histórico de revisões de documentos</h2>
+
+        <div className="overflow-auto">
+          <table className="min-w-[1100px] w-full text-sm">
+            <thead>
+              <tr className="text-left border-b">
+                <th className="py-2">Documento</th>
+                <th className="py-2">Decisão</th>
+                <th className="py-2">Técnico</th>
+                <th className="py-2">Data</th>
+                <th className="py-2">Comentário</th>
+              </tr>
+            </thead>
+            <tbody>
+              {reviewHistory.map((r) => {
+                const prof = reviewerById?.[r.decided_by];
+                const who = prof?.full_name?.trim()
+                  ? `${prof.full_name}${prof.email ? ` (${prof.email})` : ""}`
+                  : prof?.email ?? r.decided_by;
+
+                return (
+                  <tr key={r.id} className="border-b">
+                    <td className="py-2">{docNameById[r.document_id] ?? r.document_id}</td>
+                    <td className="py-2">{r.decision}</td>
+                    <td className="py-2">{who}</td>
+                    <td className="py-2">{r.decided_at ? new Date(r.decided_at).toLocaleString() : "-"}</td>
+                    <td className="py-2">{r.comment ?? "-"}</td>
+                  </tr>
+                );
+              })}
+
+              {reviewHistory.length === 0 && (
+                <tr>
+                  <td className="py-3 text-neutral-600" colSpan={5}>
+                    Ainda não existem revisões.
+                  </td>
+                </tr>
+              )}
+            </tbody>
+          </table>
+        </div>
+      </section>
+
+      {/* Histórico de estados */}
       <section className="rounded-2xl border p-4 shadow-sm">
         <h2 className="font-medium mb-3">Histórico de estados</h2>
         <div className="overflow-auto">
@@ -234,6 +318,7 @@ export default function BackofficeApplicationClient({
                   <td className="py-2">{h.comment ?? "-"}</td>
                 </tr>
               ))}
+
               {history.length === 0 && (
                 <tr>
                   <td className="py-3 text-neutral-600" colSpan={4}>
