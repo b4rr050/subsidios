@@ -39,6 +39,7 @@ export default async function BackofficeApplicationsPage() {
     `
     )
     .eq("is_deleted", false)
+    .neq("current_status", "S1_DRAFT") // ✅ não mostrar rascunhos no backoffice
     .order("created_at", { ascending: false })
     .limit(200);
 
@@ -103,9 +104,7 @@ export default async function BackofficeApplicationsPage() {
 
                   <td className="py-2">{Number(a.requested_amount ?? 0).toFixed(2)} €</td>
                   <td className="py-2">{a.current_status}</td>
-                  <td className="py-2">
-                    {a.created_at ? new Date(a.created_at).toLocaleString() : "-"}
-                  </td>
+                  <td className="py-2">{a.created_at ? new Date(a.created_at).toLocaleString() : "-"}</td>
                 </tr>
               ))}
 
