@@ -53,6 +53,10 @@ function money(v: any) {
   const n = Number(v ?? 0);
   return `${n.toFixed(2)} €`;
 }
+function fmtDate(dt?: string | null) {
+  if (!dt) return "-";
+  return new Date(dt).toLocaleString("pt-PT", { timeZone: "Europe/Lisbon" });
+}
 
 export default function BackofficeApplicationClient({
   application,
@@ -78,12 +82,10 @@ export default function BackofficeApplicationClient({
 
   const [msg, setMsg] = useState<string | null>(null);
   const [docMsg, setDocMsg] = useState<string | null>(null);
-  const [loadingAction, setLoadingAction] = useState<string | null>(null);
-  const [loadingDocId, setLoadingDocId] = useState<string | null>(null);
+  const [loading, setLoading] = useState<string | null>(null);
 
   const status = application.current_status;
 
-  // ---- Mapeamentos úteis
   const docTypeNameById = useMemo(() => {
     const m: Record<string, string> = {};
     for (const t of documentTypes ?? []) m[t.id] = t.name;
@@ -96,55 +98,6 @@ export default function BackofficeApplicationClient({
     return m;
   }, [documents]);
 
-  // ---- Regras simples por estado (ajusta se o teu workflow tiver mais estados)
-  const canAssume = status === "S2_SUBMITTED";
-  const canValidateOrReturn = status === "S3_IN_REVIEW"; // normalmente depois de assumir
-  const canReopen = status === "S5_TECH_VALIDATED"; // reabrir p/ entidade submeter docs (S4_RETURNED)
-
-  async function callAction(endpoint: "assume" | "validate" | "return" | "reopen") {
-    setMsg(null);
-
-    let body: any = {};
-
-    if (endpoint === "return") {
-      const c = window.prompt("Motivo para devolver à entidade (obrigatório):") ?? "";
-      if (!c.trim()) {
-        setMsg("Ação cancelada: comentário é obrigatório.");
-        return;
-      }
-      body.comment = c.trim();
-    }
-
-    if (endpoint === "reopen") {
-      const c = window.prompt("Motivo para reabrir (opcional):") ?? "";
-      if (c.trim()) body.comment = c.trim();
-    }
-
-    setLoadingAction(endpoint);
-
-    const res = await fetch(`/api/backoffice/applications/${application.id}/${endpoint}`, {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify(body),
-    });
-
-    const data = await res.json().catch(() => ({}));
-    setLoadingAction(null);
-
-    if (!res.ok || data?.ok !== true) {
-      setMsg(data?.error ?? `Erro ao executar ${endpoint}.`);
-      return;
-    }
-
-    if (endpoint === "assume") setMsg("Pedido assumido pelo técnico.");
-    if (endpoint === "validate") setMsg("Pedido validado tecnicamente.");
-    if (endpoint === "return") setMsg("Pedido devolvido à entidade.");
-    if (endpoint === "reopen") setMsg("Pedido reaberto para a entidade.");
-
-    router.refresh();
-  }
-
-  // ---- Documentos: abrir
   async function openDoc(d: DocRow) {
     setDocMsg(null);
     const path = d.storage_path ?? d.file_path ?? null;
@@ -155,31 +108,24 @@ export default function BackofficeApplicationClient({
     }
 
     const { data, error } = await supabase.storage.from("docs").createSignedUrl(path, 60);
-
     if (error || !data?.signedUrl) {
-      setDocMsg(error?.message ?? "Erro a gerar link para abrir documento.");
+      setDocMsg(error?.message ?? "Erro a gerar link.");
       return;
     }
-
     window.open(data.signedUrl, "_blank", "noopener,noreferrer");
   }
 
-  // ---- Documentos: aprovar/rejeitar (isto já tinhas)
-  async function review(doc: DocRow, decision: "APPROVE" | "REJECT") {
+  async function reviewDoc(doc: DocRow, decision: "APPROVE" | "REJECT") {
     setDocMsg(null);
 
-    let comment: string | undefined = undefined;
-
+    let comment: string | undefined;
     if (decision === "REJECT") {
       const c = window.prompt("Motivo da rejeição (obrigatório):") ?? "";
-      if (!c.trim()) {
-        setDocMsg("Rejeição cancelada: comentário é obrigatório.");
-        return;
-      }
+      if (!c.trim()) return;
       comment = c.trim();
     }
 
-    setLoadingDocId(doc.id);
+    setLoading(doc.id);
 
     const res = await fetch(`/api/backoffice/documents/${doc.id}/review`, {
       method: "POST",
@@ -188,28 +134,53 @@ export default function BackofficeApplicationClient({
     });
 
     const data = await res.json().catch(() => ({}));
-    setLoadingDocId(null);
+    setLoading(null);
 
     if (!res.ok || data?.ok !== true) {
       setDocMsg(data?.error ?? "Erro a rever documento.");
       return;
     }
 
-    setDocMsg(decision === "APPROVE" ? "Documento aprovado." : "Documento rejeitado.");
-
+    setDocMsg(decision === "APPROVE" ? "Documento aprovado." : "Documento rejeitado (pedido devolvido à entidade).");
     router.refresh();
   }
 
+  // ---- WORKFLOW TECH ----
+  async function action(label: string, url: string, body: any = {}) {
+    setMsg(null);
+    setLoading(label);
+
+    const res = await fetch(url, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(body),
+    });
+
+    const data = await res.json().catch(() => ({}));
+    setLoading(null);
+
+    if (!res.ok || data?.ok !== true) {
+      setMsg(data?.error ?? `Erro: ${label}`);
+      return;
+    }
+
+    setMsg("Operação executada.");
+    router.refresh();
+  }
+
+  const canSendToPresident = status === "S5_TECH_VALIDATED";
+
   return (
     <div className="space-y-6">
-      {/* Cabeçalho / resumo */}
+      {/* Resumo */}
       <section className="rounded-2xl border p-4 shadow-sm">
         <div className="flex items-start justify-between gap-4">
           <div className="space-y-1">
             <h2 className="font-medium">Resumo</h2>
             <p className="text-sm text-neutral-900">{application.object_title}</p>
             <p className="text-xs text-neutral-600">
-              {entity?.name ?? "Entidade"} {entity?.nif ? `• NIF ${entity.nif}` : ""} {category?.name ? `• ${category.name}` : ""}
+              {entity?.name ?? "Entidade"} {entity?.nif ? `• NIF ${entity.nif}` : ""}{" "}
+              {category?.name ? `• ${category.name}` : ""}
             </p>
 
             <div className="mt-2 grid grid-cols-2 gap-x-6 gap-y-1 text-xs text-neutral-600">
@@ -220,12 +191,10 @@ export default function BackofficeApplicationClient({
                 <span className="text-neutral-500">Origem:</span> {application.origin ?? "-"}
               </div>
               <div>
-                <span className="text-neutral-500">Criado:</span>{" "}
-                {application.created_at ? new Date(application.created_at).toLocaleString("pt-PT") : "-"}
+                <span className="text-neutral-500">Criado:</span> {fmtDate(application.created_at)}
               </div>
               <div>
-                <span className="text-neutral-500">Atualizado:</span>{" "}
-                {application.updated_at ? new Date(application.updated_at).toLocaleString("pt-PT") : "-"}
+                <span className="text-neutral-500">Atualizado:</span> {fmtDate(application.updated_at)}
               </div>
               <div className="col-span-2">
                 <span className="text-neutral-500">ID:</span> {application.id}
@@ -235,61 +204,32 @@ export default function BackofficeApplicationClient({
 
           <span className="text-sm rounded-md border px-2 py-1">{status}</span>
         </div>
-      </section>
 
-      {/* Ações do Técnico */}
-      <section className="rounded-2xl border p-4 shadow-sm">
-        <h2 className="font-medium">Ações (Técnico)</h2>
-
-        <div className="mt-3 flex flex-wrap gap-2">
+        {/* Ações do TECH */}
+        <div className="mt-4 flex flex-wrap gap-2">
           <button
             type="button"
             className="rounded-md border px-3 py-2 text-sm disabled:opacity-60"
-            disabled={!canAssume || loadingAction !== null}
-            onClick={() => callAction("assume")}
-            title={canAssume ? "" : "Só disponível quando o pedido está em SUBMITTED."}
+            disabled={!canSendToPresident || loading !== null}
+            onClick={() =>
+              action(
+                "send_to_president",
+                `/api/backoffice/applications/${application.id}/send-to-president`,
+                {}
+              )
+            }
+            title="Só disponível em S5_TECH_VALIDATED"
           >
-            {loadingAction === "assume" ? "..." : "Assumir"}
+            {loading === "send_to_president" ? "..." : "Enviar ao Presidente"}
           </button>
 
-          <button
-            type="button"
-            className="rounded-md border px-3 py-2 text-sm disabled:opacity-60"
-            disabled={!canValidateOrReturn || loadingAction !== null}
-            onClick={() => callAction("validate")}
-            title={canValidateOrReturn ? "" : "Só disponível quando o pedido está em análise (IN_REVIEW)."}
-          >
-            {loadingAction === "validate" ? "..." : "Validar"}
-          </button>
-
-          <button
-            type="button"
-            className="rounded-md border px-3 py-2 text-sm disabled:opacity-60"
-            disabled={!canValidateOrReturn || loadingAction !== null}
-            onClick={() => callAction("return")}
-            title={canValidateOrReturn ? "" : "Só disponível quando o pedido está em análise (IN_REVIEW)."}
-          >
-            {loadingAction === "return" ? "..." : "Devolver"}
-          </button>
-
-          <button
-            type="button"
-            className="rounded-md border px-3 py-2 text-sm disabled:opacity-60"
-            disabled={!canReopen || loadingAction !== null}
-            onClick={() => callAction("reopen")}
-            title={canReopen ? "" : "Só disponível após validação técnica."}
-          >
-            {loadingAction === "reopen" ? "..." : "Reabrir"}
-          </button>
+          {msg && <p className="text-sm ml-2">{msg}</p>}
         </div>
-
-        {msg && <p className="mt-3 text-sm">{msg}</p>}
       </section>
 
       {/* Documentos */}
       <section className="rounded-2xl border p-4 shadow-sm">
         <h2 className="font-medium">Documentos</h2>
-
         {docMsg && <p className="mt-3 text-sm">{docMsg}</p>}
 
         <div className="mt-4 overflow-auto">
@@ -307,7 +247,7 @@ export default function BackofficeApplicationClient({
             <tbody>
               {documents.map((d) => (
                 <tr key={d.id} className="border-b">
-                  <td className="py-2">{docTypeNameById[d.document_type_id] ?? "-"}</td>
+                  <td className="py-2">{docTypeNameById[d.document_type_id] ?? d.document_type_id}</td>
                   <td className="py-2">
                     <button className="underline" type="button" onClick={() => openDoc(d)}>
                       {d.original_name}
@@ -315,30 +255,29 @@ export default function BackofficeApplicationClient({
                   </td>
                   <td className="py-2">{d.status}</td>
                   <td className="py-2">{d.review_comment ?? "-"}</td>
-                  <td className="py-2">{d.uploaded_at ? new Date(d.uploaded_at).toLocaleString("pt-PT") : "-"}</td>
+                  <td className="py-2">{fmtDate(d.uploaded_at)}</td>
                   <td className="py-2">
                     <div className="flex gap-2">
                       <button
                         type="button"
                         className="rounded-md border px-3 py-1 disabled:opacity-60"
-                        disabled={loadingDocId === d.id}
-                        onClick={() => review(d, "APPROVE")}
+                        disabled={loading === d.id}
+                        onClick={() => reviewDoc(d, "APPROVE")}
                       >
-                        {loadingDocId === d.id ? "..." : "Aprovar"}
+                        {loading === d.id ? "..." : "Aprovar"}
                       </button>
                       <button
                         type="button"
                         className="rounded-md border px-3 py-1 disabled:opacity-60"
-                        disabled={loadingDocId === d.id}
-                        onClick={() => review(d, "REJECT")}
+                        disabled={loading === d.id}
+                        onClick={() => reviewDoc(d, "REJECT")}
                       >
-                        {loadingDocId === d.id ? "..." : "Rejeitar"}
+                        {loading === d.id ? "..." : "Rejeitar"}
                       </button>
                     </div>
                   </td>
                 </tr>
               ))}
-
               {documents.length === 0 && (
                 <tr>
                   <td className="py-3 text-neutral-600" colSpan={6}>
@@ -354,7 +293,6 @@ export default function BackofficeApplicationClient({
       {/* Histórico de revisões */}
       <section className="rounded-2xl border p-4 shadow-sm">
         <h2 className="font-medium mb-3">Histórico de revisões de documentos</h2>
-
         <div className="overflow-auto">
           <table className="min-w-[1100px] w-full text-sm">
             <thead>
@@ -378,12 +316,11 @@ export default function BackofficeApplicationClient({
                     <td className="py-2">{docNameById[r.document_id] ?? r.document_id}</td>
                     <td className="py-2">{r.decision}</td>
                     <td className="py-2">{who}</td>
-                    <td className="py-2">{r.decided_at ? new Date(r.decided_at).toLocaleString("pt-PT") : "-"}</td>
+                    <td className="py-2">{fmtDate(r.decided_at)}</td>
                     <td className="py-2">{r.comment ?? "-"}</td>
                   </tr>
                 );
               })}
-
               {reviewHistory.length === 0 && (
                 <tr>
                   <td className="py-3 text-neutral-600" colSpan={5}>
@@ -414,11 +351,10 @@ export default function BackofficeApplicationClient({
                 <tr key={h.id} className="border-b">
                   <td className="py-2">{h.from_status ?? "-"}</td>
                   <td className="py-2">{h.to_status}</td>
-                  <td className="py-2">{h.changed_at ? new Date(h.changed_at).toLocaleString("pt-PT") : "-"}</td>
+                  <td className="py-2">{fmtDate(h.changed_at)}</td>
                   <td className="py-2">{h.comment ?? "-"}</td>
                 </tr>
               ))}
-
               {history.length === 0 && (
                 <tr>
                   <td className="py-3 text-neutral-600" colSpan={4}>
