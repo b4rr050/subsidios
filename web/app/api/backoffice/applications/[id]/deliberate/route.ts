@@ -42,19 +42,18 @@ function buildEmail({
   approvedAmount: number | null;
 }) {
   const datePt = meetingDate;
+
   const voting =
     outcome === "APPROVED"
-      ? (votesFor || votesAgainst || votesAbstain)
+      ? votesFor || votesAgainst || votesAbstain
         ? `Aprovado em Reunião de Câmara de ${datePt}, com votação: ${votesFor ?? "-"} a favor, ${votesAgainst ?? "-"} contra, ${votesAbstain ?? "-"} abstenções.`
         : `Aprovado em Reunião de Câmara de ${datePt}.`
-      : (votesFor || votesAgainst || votesAbstain)
+      : votesFor || votesAgainst || votesAbstain
         ? `Rejeitado em Reunião de Câmara de ${datePt}, com votação: ${votesFor ?? "-"} a favor, ${votesAgainst ?? "-"} contra, ${votesAbstain ?? "-"} abstenções.`
         : `Rejeitado em Reunião de Câmara de ${datePt}.`;
 
   const amountLine =
-    outcome === "APPROVED" && approvedAmount != null
-      ? `\n\nValor aprovado: ${approvedAmount.toFixed(2)} €`
-      : "";
+    outcome === "APPROVED" && approvedAmount != null ? `\n\nValor aprovado: ${approvedAmount.toFixed(2)} €` : "";
 
   const next =
     outcome === "APPROVED"
@@ -66,8 +65,7 @@ function buildEmail({
       ? `Deliberação do Pedido de Apoio – ${applicationTitle}`
       : `Deliberação do Pedido – ${applicationTitle}`;
 
-  const text =
-`Caro(a) ${entityName},
+  const text = `Caro(a) ${entityName},
 
 ${voting}${amountLine}${next}
 
@@ -91,12 +89,7 @@ async function sendEmailResend(to: string[], subject: string, text: string) {
       Authorization: `Bearer ${key}`,
       "content-type": "application/json",
     },
-    body: JSON.stringify({
-      from,
-      to,
-      subject,
-      text,
-    }),
+    body: JSON.stringify({ from, to, subject, text }),
   });
 
   if (!res.ok) {
@@ -105,6 +98,17 @@ async function sendEmailResend(to: string[], subject: string, text: string) {
   }
 
   return { ok: true };
+}
+
+async function insertHistorySafe(supabase: any, rowWithActor: any, rowWithoutActor: any) {
+  // tenta com changed_by / actor; se falhar, tenta sem
+  const attempt1 = await supabase.from("application_status_history").insert(rowWithActor);
+  if (!attempt1?.error) return { ok: true };
+
+  const attempt2 = await supabase.from("application_status_history").insert(rowWithoutActor);
+  if (!attempt2?.error) return { ok: true, warning: attempt1.error?.message ?? "Falhou insert com changed_by; inserido sem changed_by." };
+
+  return { ok: false, error: attempt2.error?.message ?? attempt1.error?.message ?? "Falha ao inserir histórico." };
 }
 
 export async function POST(req: Request, ctx: { params: ParamsPromise }) {
@@ -141,7 +145,7 @@ export async function POST(req: Request, ctx: { params: ParamsPromise }) {
   const { data: me } = await supabase.from("profiles").select("id").eq("id", user.id).single();
   const actorId = me?.id ?? user.id;
 
-  // Buscar pedido (precisa estar enviado a reunião)
+  // Pedido tem de estar enviado a reunião
   const { data: app, error: appErr } = await supabase
     .from("applications")
     .select("id, entity_id, object_title, current_status, approved_amount")
@@ -160,10 +164,10 @@ export async function POST(req: Request, ctx: { params: ParamsPromise }) {
     );
   }
 
-  // Entidade (nome)
+  // Entidade (nome/nif)
   const { data: ent } = await supabase.from("entities").select("id,name,nif").eq("id", app.entity_id).single();
 
-  // 1) Guardar deliberação (upsert 1 por pedido)
+  // 1) Guardar deliberação
   const { error: delErr } = await supabase.from("meeting_deliberations").upsert({
     application_id: id,
     meeting_date,
@@ -180,8 +184,7 @@ export async function POST(req: Request, ctx: { params: ParamsPromise }) {
 
   if (delErr) return NextResponse.json({ ok: false, error: delErr.message }, { status: 400 });
 
-  // 2) Atualizar estados no pedido + histórico
-  // Marcar como deliberado
+  // 2) Atualizar estado para S9_DELIBERATED
   const { error: up1 } = await supabase
     .from("applications")
     .update({
@@ -192,67 +195,67 @@ export async function POST(req: Request, ctx: { params: ParamsPromise }) {
 
   if (up1) return NextResponse.json({ ok: false, error: up1.message }, { status: 400 });
 
-  await supabase.from("application_status_history").insert({
-    application_id: id,
-    from_status: "S8_SENT_TO_MEETING",
-    to_status: "S9_DELIBERATED",
-    comment: `Deliberação registada (resultado: ${outcome}).`,
-    changed_by: actorId,
-  } as any).catch(async () => {
-    await supabase.from("application_status_history").insert({
+  // Histórico 1
+  const h1 = await insertHistorySafe(
+    supabase,
+    {
       application_id: id,
       from_status: "S8_SENT_TO_MEETING",
       to_status: "S9_DELIBERATED",
       comment: `Deliberação registada (resultado: ${outcome}).`,
-    } as any);
-  });
+      changed_by: actorId,
+    },
+    {
+      application_id: id,
+      from_status: "S8_SENT_TO_MEETING",
+      to_status: "S9_DELIBERATED",
+      comment: `Deliberação registada (resultado: ${outcome}).`,
+    }
+  );
 
-  // Estado final após deliberação
+  // 3) Estado final após deliberação
   const finalStatus = outcome === "APPROVED" ? "S10_AWAITING_EXPENSE" : "S15_CLOSED";
 
-  const { error: up2 } = await supabase
-    .from("applications")
-    .update({ current_status: finalStatus })
-    .eq("id", id);
-
+  const { error: up2 } = await supabase.from("applications").update({ current_status: finalStatus }).eq("id", id);
   if (up2) return NextResponse.json({ ok: false, error: up2.message }, { status: 400 });
 
-  await supabase.from("application_status_history").insert({
-    application_id: id,
-    from_status: "S9_DELIBERATED",
-    to_status: finalStatus,
-    comment: outcome === "APPROVED"
-      ? "Pedido aprovado e a aguardar documentos de despesa."
-      : "Pedido rejeitado e encerrado.",
-    changed_by: actorId,
-  } as any).catch(async () => {
-    await supabase.from("application_status_history").insert({
+  // Histórico 2
+  const h2 = await insertHistorySafe(
+    supabase,
+    {
       application_id: id,
       from_status: "S9_DELIBERATED",
       to_status: finalStatus,
-      comment: outcome === "APPROVED"
-        ? "Pedido aprovado e a aguardar documentos de despesa."
-        : "Pedido rejeitado e encerrado.",
-    } as any);
-  });
+      comment: outcome === "APPROVED" ? "Pedido aprovado e a aguardar documentos de despesa." : "Pedido rejeitado e encerrado.",
+      changed_by: actorId,
+    },
+    {
+      application_id: id,
+      from_status: "S9_DELIBERATED",
+      to_status: finalStatus,
+      comment: outcome === "APPROVED" ? "Pedido aprovado e a aguardar documentos de despesa." : "Pedido rejeitado e encerrado.",
+    }
+  );
 
-  // 3) Email automático (opcional)
+  // 4) Email (opcional)
   let warning: string | null = null;
 
+  if (!h1.ok) warning = `Aviso histórico (1): ${h1.error}`;
+  if (!h2.ok) warning = `${warning ? warning + " | " : ""}Aviso histórico (2): ${h2.error}`;
+  if (h1.ok && (h1 as any).warning) warning = (h1 as any).warning;
+  if (h2.ok && (h2 as any).warning) warning = `${warning ? warning + " | " : ""}${(h2 as any).warning}`;
+
   if (notify_entity) {
-    // emails: perfis ativos associados à entidade
     const { data: emailsRows } = await supabase
       .from("profiles")
       .select("email")
       .eq("entity_id", app.entity_id)
       .eq("is_active", true);
 
-    const recipients = Array.from(
-      new Set((emailsRows ?? []).map((r: any) => String(r.email ?? "").trim()).filter(Boolean))
-    );
+    const recipients = Array.from(new Set((emailsRows ?? []).map((r: any) => String(r.email ?? "").trim()).filter(Boolean)));
 
     if (recipients.length === 0) {
-      warning = "Sem emails associados à entidade (profiles.email).";
+      warning = `${warning ? warning + " | " : ""}Sem emails associados à entidade (profiles.email).`;
     } else {
       const { subject, text } = buildEmail({
         entityName: ent?.name ?? "Entidade",
@@ -266,7 +269,7 @@ export async function POST(req: Request, ctx: { params: ParamsPromise }) {
       });
 
       const sent = await sendEmailResend(recipients, subject, text);
-      if (!sent.ok) warning = sent.warning ?? "Falha no envio de email.";
+      if (!sent.ok) warning = `${warning ? warning + " | " : ""}${sent.warning ?? "Falha no envio de email."}`;
     }
   }
 
