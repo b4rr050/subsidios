@@ -1,3 +1,4 @@
+import Link from "next/link";
 import { redirect } from "next/navigation";
 import { createClient } from "@/lib/supabase/server";
 import BackofficeApplicationClient from "./ui";
@@ -6,33 +7,30 @@ type ParamsPromise = Promise<{ id: string }>;
 
 async function isTechOrAdmin() {
   const supabase = await createClient();
-  const tech = await supabase.rpc("has_role", { role: "TECH" });
-  const admin = await supabase.rpc("has_role", { role: "ADMIN" });
-  return tech.data === true || admin.data === true;
+  const a = await supabase.rpc("has_role", { role: "ADMIN" });
+  const t = await supabase.rpc("has_role", { role: "TECH" });
+  return a.data === true || t.data === true;
 }
 
 export default async function BackofficeApplicationDetailPage({ params }: { params: ParamsPromise }) {
   if (!(await isTechOrAdmin())) redirect("/unauthorized");
 
-  const { id: appId } = await params;
+  const { id } = await params;
   const supabase = await createClient();
-
-  const {
-    data: { user },
-  } = await supabase.auth.getUser();
-  if (!user) redirect("/login");
 
   const { data: app, error: appErr } = await supabase
     .from("applications")
-    .select("id, entity_id, category_id, object_title, requested_amount, current_status, created_at, updated_at, origin")
-    .eq("id", appId)
+    .select("id, entity_id, category_id, object_title, requested_amount, approved_amount, current_status, origin, created_at, updated_at")
+    .eq("id", id)
+    .eq("is_deleted", false)
     .single();
 
   if (appErr || !app) {
     return (
       <div className="p-6">
-        <h1 className="text-xl font-semibold">Pedido</h1>
-        <p className="mt-2 text-sm text-red-600">Pedido não encontrado.</p>
+        <h1 className="text-xl font-semibold">Backoffice · Pedido</h1>
+        <p className="mt-2 text-sm text-red-600">{appErr?.message ?? "Pedido não encontrado."}</p>
+        <Link className="underline text-sm" href="/backoffice/applications">Voltar</Link>
       </div>
     );
   }
@@ -43,18 +41,22 @@ export default async function BackofficeApplicationDetailPage({ params }: { para
     .eq("id", app.entity_id)
     .single();
 
-  const { data: category } = await supabase
-    .from("categories")
-    .select("id, name")
-    .eq("id", app.category_id)
-    .single();
+  const { data: category } = app.category_id
+    ? await supabase.from("categories").select("id,name").eq("id", app.category_id).single()
+    : { data: null as any };
 
   const { data: history } = await supabase
     .from("application_status_history")
     .select("id, from_status, to_status, changed_at, comment")
     .eq("application_id", app.id)
     .order("changed_at", { ascending: false })
-    .limit(100);
+    .limit(80);
+
+  const { data: documentTypes } = await supabase
+    .from("document_types")
+    .select("id,name,scope,is_active")
+    .eq("is_active", true)
+    .order("name");
 
   const { data: documents } = await supabase
     .from("documents")
@@ -62,58 +64,52 @@ export default async function BackofficeApplicationDetailPage({ params }: { para
     .eq("application_id", app.id)
     .eq("is_deleted", false)
     .order("uploaded_at", { ascending: false })
-    .limit(500);
+    .limit(200);
 
-  const { data: docTypes } = await supabase
-    .from("document_types")
-    .select("id, name, scope, is_active")
-    .eq("is_active", true)
-    .order("name");
+  const { data: reviewHistory } = await supabase
+    .from("document_review_history")
+    .select("id, document_id, decision, comment, decided_by, decided_at")
+    .eq("application_id", app.id)
+    .order("decided_at", { ascending: false })
+    .limit(200);
 
-  // ✅ Review history dos documentos deste pedido
-  const docIds = (documents ?? []).map((d) => d.id);
-  let reviewHistory: any[] = [];
-  let reviewerById: Record<string, { email?: string | null; full_name?: string | null }> = {};
+  const reviewerIds = Array.from(new Set((reviewHistory ?? []).map((r: any) => r.decided_by).filter(Boolean)));
 
-  if (docIds.length) {
-    const { data: rh, error: rhErr } = await supabase
-      .from("document_review_history")
-      .select("id, document_id, decision, comment, decided_by, decided_at")
-      .in("document_id", docIds)
-      .order("decided_at", { ascending: false })
-      .limit(2000);
-
-    if (!rhErr && rh) reviewHistory = rh as any[];
-
-    const reviewerIds = Array.from(new Set((reviewHistory ?? []).map((r) => r.decided_by).filter(Boolean)));
-
-    if (reviewerIds.length) {
-      // profiles (no teu projeto já existe p.email)
-      const { data: profs } = await supabase
-        .from("profiles")
-        .select("id, email, full_name")
-        .in("id", reviewerIds);
-
-      (profs ?? []).forEach((p: any) => {
-        reviewerById[p.id] = { email: p.email ?? null, full_name: p.full_name ?? null };
-      });
-    }
+  const reviewerById: Record<string, { email?: string | null; full_name?: string | null }> = {};
+  if (reviewerIds.length) {
+    const { data: profs } = await supabase.from("profiles").select("id,email,full_name").in("id", reviewerIds);
+    for (const p of profs ?? []) reviewerById[p.id] = { email: p.email, full_name: p.full_name };
   }
+
+  // ✅ deliberação (se existir)
+  const { data: deliberation } = await supabase
+    .from("meeting_deliberations")
+    .select("application_id, meeting_date, outcome, votes_for, votes_against, votes_abstain, voting_notes, approved_amount, deliberation_notes, deliberated_at")
+    .eq("application_id", app.id)
+    .maybeSingle();
 
   return (
     <div className="p-6 space-y-6">
       <header className="flex items-center justify-between">
         <div>
-          <h1 className="text-xl font-semibold">Backoffice • Pedido</h1>
+          <h1 className="text-xl font-semibold">Backoffice · Pedido</h1>
           <p className="text-sm text-neutral-600">{app.id}</p>
-          <p className="text-xs text-neutral-500">
-            {entity?.name ?? "Entidade"} {entity?.nif ? `• NIF ${entity.nif}` : ""} {category?.name ? `• ${category.name}` : ""}
-          </p>
         </div>
 
-        <a className="rounded-md border px-3 py-2 text-sm" href="/backoffice/applications">
-          Voltar
-        </a>
+        <div className="flex items-center gap-2">
+          <Link className="rounded-md border px-3 py-2 text-sm" href="/backoffice/applications">Voltar</Link>
+
+          <form
+            action={async () => {
+              "use server";
+              const supabase = await createClient();
+              await supabase.auth.signOut();
+              redirect("/login");
+            }}
+          >
+            <button className="rounded-md border px-3 py-2 text-sm">Sair</button>
+          </form>
+        </div>
       </header>
 
       <BackofficeApplicationClient
@@ -122,9 +118,10 @@ export default async function BackofficeApplicationDetailPage({ params }: { para
         category={category as any}
         history={(history ?? []) as any}
         documents={(documents ?? []) as any}
-        documentTypes={(docTypes ?? []) as any}
-        reviewHistory={reviewHistory as any}
+        documentTypes={(documentTypes ?? []) as any}
+        reviewHistory={(reviewHistory ?? []) as any}
         reviewerById={reviewerById}
+        deliberation={deliberation as any}
       />
     </div>
   );
