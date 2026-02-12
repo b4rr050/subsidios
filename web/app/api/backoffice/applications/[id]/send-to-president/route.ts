@@ -13,18 +13,9 @@ async function isTechOrAdmin() {
 async function insertHistorySafe(supabase: any, rowWithActor: any, rowWithoutActor: any) {
   const attempt1 = await supabase.from("application_status_history").insert(rowWithActor);
   if (!attempt1?.error) return { ok: true };
-
   const attempt2 = await supabase.from("application_status_history").insert(rowWithoutActor);
-  if (!attempt2?.error)
-    return {
-      ok: true,
-      warning: attempt1.error?.message ?? "Falhou insert com changed_by; inserido sem changed_by.",
-    };
-
-  return {
-    ok: false,
-    error: attempt2.error?.message ?? attempt1.error?.message ?? "Falha ao inserir histórico.",
-  };
+  if (!attempt2?.error) return { ok: true, warning: attempt1.error?.message ?? "Inserido sem changed_by." };
+  return { ok: false, error: attempt2.error?.message ?? attempt1.error?.message ?? "Falha ao inserir histórico." };
 }
 
 export async function POST(_req: Request, ctx: { params: ParamsPromise }) {
@@ -38,7 +29,6 @@ export async function POST(_req: Request, ctx: { params: ParamsPromise }) {
   const {
     data: { user },
   } = await supabase.auth.getUser();
-
   if (!user) return NextResponse.json({ ok: false, error: "Não autenticado." }, { status: 401 });
 
   const { data: me } = await supabase.from("profiles").select("id").eq("id", user.id).single();
@@ -50,13 +40,9 @@ export async function POST(_req: Request, ctx: { params: ParamsPromise }) {
     .eq("id", id)
     .single();
 
-  if (appErr || !app) {
-    return NextResponse.json({ ok: false, error: appErr?.message ?? "Pedido não encontrado." }, { status: 404 });
-  }
-
+  if (appErr || !app) return NextResponse.json({ ok: false, error: appErr?.message ?? "Pedido não encontrado." }, { status: 404 });
   if (app.is_deleted) return NextResponse.json({ ok: false, error: "Pedido eliminado." }, { status: 400 });
 
-  // ✅ Só faz sentido enviar ao Presidente quando o Tech já validou
   if (app.current_status !== "S5_TECH_VALIDATED") {
     return NextResponse.json(
       { ok: false, error: `Estado inválido: ${app.current_status}. Esperado: S5_TECH_VALIDATED.` },
@@ -77,19 +63,16 @@ export async function POST(_req: Request, ctx: { params: ParamsPromise }) {
       application_id: id,
       from_status: "S5_TECH_VALIDATED",
       to_status: "S6_READY_FOR_PRESIDENT",
-      comment: "Enviado pelo Técnico ao Presidente para decisão.",
+      comment: "Enviado ao Presidente.",
       changed_by: actorId,
     },
     {
       application_id: id,
       from_status: "S5_TECH_VALIDATED",
       to_status: "S6_READY_FOR_PRESIDENT",
-      comment: "Enviado pelo Técnico ao Presidente para decisão.",
+      comment: "Enviado ao Presidente.",
     }
   );
 
-  return NextResponse.json({
-    ok: true,
-    warning: h.ok ? (h as any).warning ?? null : h.error ?? "Falha ao inserir histórico.",
-  });
+  return NextResponse.json({ ok: true, warning: h.ok ? (h as any).warning ?? null : h.error ?? null });
 }

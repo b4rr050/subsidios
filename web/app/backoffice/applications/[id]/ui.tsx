@@ -49,17 +49,6 @@ type Hist = {
   comment: string | null;
 };
 
-type Deliberation = {
-  application_id: string;
-  meeting_date?: string | null;
-  outcome?: string | null;
-  votes_for?: number | null;
-  votes_against?: number | null;
-  abstentions?: number | null;
-  details?: string | null;
-  created_at?: string | null;
-} | null;
-
 function money(v: any) {
   const n = Number(v ?? 0);
   return `${n.toFixed(2)} €`;
@@ -79,7 +68,6 @@ export default function BackofficeApplicationClient({
   documentTypes,
   reviewHistory,
   reviewerById,
-  deliberation,
 }: {
   application: App;
   entity: Entity | null;
@@ -89,7 +77,6 @@ export default function BackofficeApplicationClient({
   documentTypes: DocType[];
   reviewHistory: ReviewRow[];
   reviewerById: Record<string, { email?: string | null; full_name?: string | null }>;
-  deliberation?: Deliberation;
 }) {
   const router = useRouter();
   const supabase = createClient();
@@ -113,22 +100,68 @@ export default function BackofficeApplicationClient({
     return m;
   }, [documents]);
 
-  // 🔁 Ações Tech
-  const canReturnToEntity = status === "S3_IN_REVIEW";
-  const canValidateTech = status === "S3_IN_REVIEW";
-  const canSendToPresident = status === "S5_TECH_VALIDATED";
+  const canAssume = status === "S2_SUBMITTED";
+  const canValidate = status === "S3_IN_REVIEW";
+  const canReturn = status === "S3_IN_REVIEW" || status === "S5_TECH_VALIDATED";
+  const canSendPresident = status === "S5_TECH_VALIDATED";
+
+  async function doAction(kind: "ASSUME" | "VALIDATE" | "RETURN" | "SEND_PRESIDENT") {
+    setMsg(null);
+
+    let url = "";
+    let body: any = {};
+
+    if (kind === "ASSUME") url = `/api/backoffice/applications/${application.id}/assume`;
+    if (kind === "VALIDATE") url = `/api/backoffice/applications/${application.id}/validate`;
+    if (kind === "SEND_PRESIDENT") url = `/api/backoffice/applications/${application.id}/send-to-president`;
+
+    if (kind === "RETURN") {
+      const reason = (window.prompt("Motivo para devolver à entidade (obrigatório):") ?? "").trim();
+      if (!reason) {
+        setMsg("Devolução cancelada: motivo é obrigatório.");
+        return;
+      }
+      url = `/api/backoffice/applications/${application.id}/return`;
+      body = { reason };
+    }
+
+    setLoadingAction(kind);
+
+    const res = await fetch(url, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(body),
+    });
+
+    const data = await res.json().catch(() => ({}));
+    setLoadingAction(null);
+
+    if (!res.ok || data?.ok !== true) {
+      setMsg(data?.error ?? "Erro na ação.");
+      return;
+    }
+
+    if (data?.warning) setMsg(`OK, mas aviso: ${data.warning}`);
+    else {
+      if (kind === "ASSUME") setMsg("Pedido assumido (em revisão).");
+      if (kind === "VALIDATE") setMsg("Pedido validado tecnicamente.");
+      if (kind === "RETURN") setMsg("Pedido devolvido à entidade.");
+      if (kind === "SEND_PRESIDENT") setMsg("Pedido enviado ao Presidente.");
+    }
+
+    router.refresh();
+  }
 
   async function openDoc(d: DocRow) {
     setDocMsg(null);
-    const path = d.storage_path ?? d.file_path ?? null;
 
+    const path = d.storage_path ?? d.file_path ?? null;
     if (!path) {
       setDocMsg("Documento sem caminho no storage.");
       return;
     }
 
     const { data, error } = await supabase.storage.from("docs").createSignedUrl(path, 60);
-
     if (error || !data?.signedUrl) {
       setDocMsg(error?.message ?? "Erro a gerar link para abrir documento.");
       return;
@@ -137,93 +170,27 @@ export default function BackofficeApplicationClient({
     window.open(data.signedUrl, "_blank", "noopener,noreferrer");
   }
 
-  async function techReturnToEntity() {
-    setMsg(null);
-    const comment = (window.prompt("Motivo para devolver à entidade (obrigatório):") ?? "").trim();
-    if (!comment) {
-      setMsg("Operação cancelada: comentário obrigatório.");
-      return;
-    }
-
-    setLoadingAction("RETURN");
-    const res = await fetch(`/api/backoffice/applications/${application.id}/return`, {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({ comment }),
-    });
-    const data = await res.json().catch(() => ({}));
-    setLoadingAction(null);
-
-    if (!res.ok || data?.ok !== true) {
-      setMsg(data?.error ?? "Erro ao devolver.");
-      return;
-    }
-
-    setMsg("Pedido devolvido à entidade.");
-    router.refresh();
-  }
-
-  async function techValidate() {
-    setMsg(null);
-
-    setLoadingAction("VALIDATE");
-    const res = await fetch(`/api/backoffice/applications/${application.id}/validate`, {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({}),
-    });
-    const data = await res.json().catch(() => ({}));
-    setLoadingAction(null);
-
-    if (!res.ok || data?.ok !== true) {
-      setMsg(data?.error ?? "Erro ao validar tecnicamente.");
-      return;
-    }
-
-    setMsg("Validado tecnicamente.");
-    router.refresh();
-  }
-
-  async function techSendToPresident() {
-    setMsg(null);
-
-    setLoadingAction("SEND_PRESIDENT");
-    const res = await fetch(`/api/backoffice/applications/${application.id}/send_to_president`, {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({}),
-    });
-    const data = await res.json().catch(() => ({}));
-    setLoadingAction(null);
-
-    if (!res.ok || data?.ok !== true) {
-      setMsg(data?.error ?? "Erro ao enviar ao Presidente.");
-      return;
-    }
-
-    setMsg("Enviado ao Presidente.");
-    router.refresh();
-  }
-
-  async function reviewDoc(doc: DocRow, decision: "APPROVE" | "REJECT") {
+  async function review(doc: DocRow, decision: "APPROVE" | "REJECT") {
     setDocMsg(null);
 
     let comment: string | undefined = undefined;
     if (decision === "REJECT") {
       const c = (window.prompt("Motivo da rejeição (obrigatório):") ?? "").trim();
       if (!c) {
-        setDocMsg("Rejeição cancelada: comentário obrigatório.");
+        setDocMsg("Rejeição cancelada: comentário é obrigatório.");
         return;
       }
       comment = c;
     }
 
     setLoadingDocId(doc.id);
+
     const res = await fetch(`/api/backoffice/documents/${doc.id}/review`, {
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify({ decision, comment }),
     });
+
     const data = await res.json().catch(() => ({}));
     setLoadingDocId(null);
 
@@ -232,20 +199,23 @@ export default function BackofficeApplicationClient({
       return;
     }
 
-    setDocMsg(decision === "APPROVE" ? "Documento aprovado." : "Documento rejeitado (pedido devolvido à entidade).");
+    if (data?.warning) setDocMsg(`OK, mas aviso: ${data.warning}`);
+    else setDocMsg(decision === "APPROVE" ? "Documento aprovado." : "Documento rejeitado.");
+
     router.refresh();
   }
 
   return (
     <div className="space-y-6">
-      {/* Resumo */}
+      {/* Resumo + ações */}
       <section className="rounded-2xl border p-4 shadow-sm">
         <div className="flex items-start justify-between gap-4">
           <div className="space-y-1">
             <h2 className="font-medium">Resumo</h2>
             <p className="text-sm text-neutral-900">{application.object_title}</p>
             <p className="text-xs text-neutral-600">
-              {entity?.name ?? "Entidade"} {entity?.nif ? `• NIF ${entity.nif}` : ""} {category?.name ? `• ${category.name}` : ""}
+              {entity?.name ?? "Entidade"} {entity?.nif ? `• NIF ${entity.nif}` : ""}{" "}
+              {category?.name ? `• ${category.name}` : ""}
             </p>
 
             <div className="mt-2 grid grid-cols-2 gap-x-6 gap-y-1 text-xs text-neutral-600">
@@ -262,74 +232,59 @@ export default function BackofficeApplicationClient({
                 <span className="text-neutral-500">Atualizado:</span> {fmtDate(application.updated_at)}
               </div>
             </div>
+
+            {/* Ações do técnico */}
+            <div className="mt-4 flex flex-wrap gap-2">
+              <button
+                type="button"
+                className="rounded-md border px-3 py-2 text-sm disabled:opacity-60"
+                disabled={!canAssume || loadingAction !== null}
+                onClick={() => doAction("ASSUME")}
+              >
+                {loadingAction === "ASSUME" ? "..." : "Assumir"}
+              </button>
+
+              <button
+                type="button"
+                className="rounded-md border px-3 py-2 text-sm disabled:opacity-60"
+                disabled={!canValidate || loadingAction !== null}
+                onClick={() => doAction("VALIDATE")}
+              >
+                {loadingAction === "VALIDATE" ? "..." : "Validar tecnicamente"}
+              </button>
+
+              <button
+                type="button"
+                className="rounded-md border px-3 py-2 text-sm disabled:opacity-60"
+                disabled={!canReturn || loadingAction !== null}
+                onClick={() => doAction("RETURN")}
+              >
+                {loadingAction === "RETURN" ? "..." : "Devolver à entidade"}
+              </button>
+
+              <button
+                type="button"
+                className="rounded-md border px-3 py-2 text-sm disabled:opacity-60"
+                disabled={!canSendPresident || loadingAction !== null}
+                onClick={() => doAction("SEND_PRESIDENT")}
+              >
+                {loadingAction === "SEND_PRESIDENT" ? "..." : "Enviar ao Presidente"}
+              </button>
+            </div>
+
+            {msg && <p className="mt-3 text-sm">{msg}</p>}
           </div>
 
           <span className="text-sm rounded-md border px-2 py-1">{status}</span>
         </div>
-
-        {/* AÇÕES TECH */}
-        <div className="mt-4 flex flex-wrap gap-2 items-center">
-          <button
-            type="button"
-            className="rounded-md border px-3 py-2 text-sm disabled:opacity-60"
-            disabled={!canValidateTech || loadingAction !== null}
-            onClick={techValidate}
-          >
-            {loadingAction === "VALIDATE" ? "..." : "Validar tecnicamente"}
-          </button>
-
-          <button
-            type="button"
-            className="rounded-md border px-3 py-2 text-sm disabled:opacity-60"
-            disabled={!canReturnToEntity || loadingAction !== null}
-            onClick={techReturnToEntity}
-          >
-            {loadingAction === "RETURN" ? "..." : "Devolver à entidade"}
-          </button>
-
-          <button
-            type="button"
-            className="rounded-md bg-black px-3 py-2 text-sm text-white disabled:opacity-60"
-            disabled={!canSendToPresident || loadingAction !== null}
-            onClick={techSendToPresident}
-          >
-            {loadingAction === "SEND_PRESIDENT" ? "..." : "Enviar ao Presidente"}
-          </button>
-
-          {msg && <p className="text-sm ml-2">{msg}</p>}
-        </div>
       </section>
-
-      {/* Deliberação (se existir) */}
-      {deliberation ? (
-        <section className="rounded-2xl border p-4 shadow-sm">
-          <h2 className="font-medium">Deliberação</h2>
-          <div className="mt-2 grid grid-cols-2 gap-x-6 gap-y-1 text-sm text-neutral-700">
-            <div>
-              <span className="text-neutral-500">Data reunião:</span> {fmtDate(deliberation.meeting_date ?? null)}
-            </div>
-            <div>
-              <span className="text-neutral-500">Resultado:</span> {deliberation.outcome ?? "-"}
-            </div>
-            <div>
-              <span className="text-neutral-500">Votos a favor:</span> {deliberation.votes_for ?? "-"}
-            </div>
-            <div>
-              <span className="text-neutral-500">Votos contra:</span> {deliberation.votes_against ?? "-"}
-            </div>
-            <div>
-              <span className="text-neutral-500">Abstenções:</span> {deliberation.abstentions ?? "-"}
-            </div>
-            <div className="col-span-2">
-              <span className="text-neutral-500">Detalhes:</span> {deliberation.details ?? "-"}
-            </div>
-          </div>
-        </section>
-      ) : null}
 
       {/* Documentos */}
       <section className="rounded-2xl border p-4 shadow-sm">
-        <h2 className="font-medium">Documentos</h2>
+        <div className="flex items-center justify-between">
+          <h2 className="font-medium">Documentos</h2>
+        </div>
+
         {docMsg && <p className="mt-3 text-sm">{docMsg}</p>}
 
         <div className="mt-4 overflow-auto">
@@ -362,7 +317,7 @@ export default function BackofficeApplicationClient({
                         type="button"
                         className="rounded-md border px-3 py-1 disabled:opacity-60"
                         disabled={loadingDocId === d.id}
-                        onClick={() => reviewDoc(d, "APPROVE")}
+                        onClick={() => review(d, "APPROVE")}
                       >
                         {loadingDocId === d.id ? "..." : "Aprovar"}
                       </button>
@@ -370,7 +325,7 @@ export default function BackofficeApplicationClient({
                         type="button"
                         className="rounded-md border px-3 py-1 disabled:opacity-60"
                         disabled={loadingDocId === d.id}
-                        onClick={() => reviewDoc(d, "REJECT")}
+                        onClick={() => review(d, "REJECT")}
                       >
                         {loadingDocId === d.id ? "..." : "Rejeitar"}
                       </button>
