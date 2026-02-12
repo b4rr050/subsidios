@@ -8,6 +8,7 @@ type Row = {
   requested_amount: number | null;
   current_status: string;
   created_at: string | null;
+  origin: string | null;
   entity?: { name: string; nif: string } | null;
   category?: { name: string } | null;
 };
@@ -18,11 +19,34 @@ async function isPresident() {
   return data === true;
 }
 
-export default async function PresidentHomePage() {
+function money(v: any) {
+  const n = Number(v ?? 0);
+  return `${n.toFixed(2)} €`;
+}
+
+function fmtDate(dt?: string | null) {
+  if (!dt) return "-";
+  return new Date(dt).toLocaleString("pt-PT", { timeZone: "Europe/Lisbon" });
+}
+
+export default async function PresidentPage() {
   if (!(await isPresident())) redirect("/unauthorized");
 
   const supabase = await createClient();
 
+  // 1) contadores (para não parecer “em branco”)
+  const { data: countsRaw, error: countsErr } = await supabase
+    .from("applications")
+    .select("current_status")
+    .eq("is_deleted", false);
+
+  const counts: Record<string, number> = {};
+  for (const r of countsRaw ?? []) {
+    const s = String((r as any).current_status ?? "");
+    counts[s] = (counts[s] ?? 0) + 1;
+  }
+
+  // 2) lista para o presidente: pendentes + já decididos
   const { data: apps, error } = await supabase
     .from("applications")
     .select(
@@ -32,12 +56,13 @@ export default async function PresidentHomePage() {
       requested_amount,
       current_status,
       created_at,
+      origin,
       entity:entities!applications_entity_id_fkey(name,nif),
       category:categories!applications_category_id_fkey(name)
     `
     )
     .eq("is_deleted", false)
-    .eq("current_status", "S6_READY_FOR_PRESIDENT")
+    .in("current_status", ["S6_READY_FOR_PRESIDENT", "S7_PRESIDENT_DECIDED"])
     .order("created_at", { ascending: false })
     .limit(200);
 
@@ -46,6 +71,7 @@ export default async function PresidentHomePage() {
       <div className="p-6">
         <h1 className="text-xl font-semibold">Presidente · Pedidos</h1>
         <p className="mt-2 text-sm text-red-600">Erro: {error.message}</p>
+        {countsErr ? <p className="mt-2 text-xs text-neutral-600">Counts erro: {countsErr.message}</p> : null}
       </div>
     );
   }
@@ -57,7 +83,7 @@ export default async function PresidentHomePage() {
       <header className="flex items-center justify-between">
         <div>
           <h1 className="text-xl font-semibold">Presidente · Pedidos</h1>
-          <p className="text-sm text-neutral-600">Pendentes para decisão (S6_READY_FOR_PRESIDENT)</p>
+          <p className="text-sm text-neutral-600">Pendentes para decisão e decisões já registadas</p>
         </div>
 
         <form
@@ -72,6 +98,30 @@ export default async function PresidentHomePage() {
         </form>
       </header>
 
+      {/* Contadores para perceber logo se existem pendentes */}
+      <section className="rounded-2xl border p-4 shadow-sm">
+        <h2 className="font-medium">Resumo</h2>
+        <div className="mt-3 grid grid-cols-2 md:grid-cols-4 gap-3 text-sm">
+          <div className="rounded-xl border p-3">
+            <div className="text-xs text-neutral-500">Prontos p/ Presidente</div>
+            <div className="text-lg font-semibold">{counts["S6_READY_FOR_PRESIDENT"] ?? 0}</div>
+          </div>
+          <div className="rounded-xl border p-3">
+            <div className="text-xs text-neutral-500">Decididos</div>
+            <div className="text-lg font-semibold">{counts["S7_PRESIDENT_DECIDED"] ?? 0}</div>
+          </div>
+          <div className="rounded-xl border p-3">
+            <div className="text-xs text-neutral-500">Em rascunho</div>
+            <div className="text-lg font-semibold">{counts["S1_DRAFT"] ?? 0}</div>
+          </div>
+          <div className="rounded-xl border p-3">
+            <div className="text-xs text-neutral-500">Submetidos</div>
+            <div className="text-lg font-semibold">{counts["S2_SUBMITTED"] ?? 0}</div>
+          </div>
+        </div>
+      </section>
+
+      {/* Lista */}
       <section className="rounded-2xl border p-4 shadow-sm">
         <div className="overflow-auto">
           <table className="min-w-[1100px] w-full text-sm">
@@ -92,21 +142,24 @@ export default async function PresidentHomePage() {
                   <td className="py-2">{a.entity?.name ?? "-"}</td>
                   <td className="py-2">{a.entity?.nif ?? "-"}</td>
                   <td className="py-2">{a.category?.name ?? "-"}</td>
+
                   <td className="py-2">
                     <Link className="underline" href={`/president/applications/${a.id}`}>
                       {a.object_title}
                     </Link>
+                    <div className="text-xs text-neutral-500">Origem: {a.origin ?? "-"}</div>
                   </td>
-                  <td className="py-2">{Number(a.requested_amount ?? 0).toFixed(2)} €</td>
+
+                  <td className="py-2">{money(a.requested_amount)}</td>
                   <td className="py-2">{a.current_status}</td>
-                  <td className="py-2">{a.created_at ? new Date(a.created_at).toLocaleString("pt-PT") : "-"}</td>
+                  <td className="py-2">{fmtDate(a.created_at)}</td>
                 </tr>
               ))}
 
               {rows.length === 0 && (
                 <tr>
                   <td className="py-3 text-neutral-600" colSpan={7}>
-                    Sem pedidos pendentes.
+                    Não existem pedidos para o Presidente neste momento (S6_READY_FOR_PRESIDENT / S7_PRESIDENT_DECIDED).
                   </td>
                 </tr>
               )}
