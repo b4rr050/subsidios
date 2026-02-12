@@ -28,24 +28,10 @@ type ReviewRow = {
   decided_at: string;
 };
 
-type Deliberation = {
-  application_id: string;
-  meeting_date: string;
-  outcome: "APPROVED" | "REJECTED";
-  votes_for: number | null;
-  votes_against: number | null;
-  votes_abstain: number | null;
-  voting_notes: string | null;
-  approved_amount: number | null;
-  deliberation_notes: string | null;
-  deliberated_at: string | null;
-} | null;
-
 type App = {
   id: string;
   object_title: string;
   requested_amount: number | null;
-  approved_amount: number | null;
   current_status: string;
   origin: string | null;
   created_at?: string | null;
@@ -67,6 +53,7 @@ function money(v: any) {
   const n = Number(v ?? 0);
   return `${n.toFixed(2)} €`;
 }
+
 function fmtDate(dt?: string | null) {
   if (!dt) return "-";
   return new Date(dt).toLocaleString("pt-PT", { timeZone: "Europe/Lisbon" });
@@ -81,7 +68,6 @@ export default function BackofficeApplicationClient({
   documentTypes,
   reviewHistory,
   reviewerById,
-  deliberation,
 }: {
   application: App;
   entity: Entity | null;
@@ -91,14 +77,14 @@ export default function BackofficeApplicationClient({
   documentTypes: DocType[];
   reviewHistory: ReviewRow[];
   reviewerById: Record<string, { email?: string | null; full_name?: string | null }>;
-  deliberation: Deliberation;
 }) {
   const router = useRouter();
   const supabase = createClient();
 
   const [msg, setMsg] = useState<string | null>(null);
   const [docMsg, setDocMsg] = useState<string | null>(null);
-  const [loading, setLoading] = useState<string | null>(null);
+  const [loadingAction, setLoadingAction] = useState<string | null>(null);
+  const [loadingDocId, setLoadingDocId] = useState<string | null>(null);
 
   const status = application.current_status;
 
@@ -114,6 +100,11 @@ export default function BackofficeApplicationClient({
     return m;
   }, [documents]);
 
+  // 🔁 Ações Tech
+  const canReturnToEntity = status === "S3_IN_REVIEW";
+  const canValidateTech = status === "S3_IN_REVIEW";
+  const canSendToPresident = status === "S5_TECH_VALIDATED"; // ✅ aqui está o “loop” que faltava
+
   async function openDoc(d: DocRow) {
     setDocMsg(null);
     const path = d.storage_path ?? d.file_path ?? null;
@@ -124,33 +115,105 @@ export default function BackofficeApplicationClient({
     }
 
     const { data, error } = await supabase.storage.from("docs").createSignedUrl(path, 60);
+
     if (error || !data?.signedUrl) {
-      setDocMsg(error?.message ?? "Erro a gerar link.");
+      setDocMsg(error?.message ?? "Erro a gerar link para abrir documento.");
       return;
     }
+
     window.open(data.signedUrl, "_blank", "noopener,noreferrer");
   }
 
+  async function techReturnToEntity() {
+    setMsg(null);
+    const comment = (window.prompt("Motivo para devolver à entidade (obrigatório):") ?? "").trim();
+    if (!comment) {
+      setMsg("Operação cancelada: comentário obrigatório.");
+      return;
+    }
+
+    setLoadingAction("RETURN");
+    const res = await fetch(`/api/backoffice/applications/${application.id}/return`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ comment }),
+    });
+    const data = await res.json().catch(() => ({}));
+    setLoadingAction(null);
+
+    if (!res.ok || data?.ok !== true) {
+      setMsg(data?.error ?? "Erro ao devolver.");
+      return;
+    }
+
+    setMsg("Pedido devolvido à entidade.");
+    router.refresh();
+  }
+
+  async function techValidate() {
+    setMsg(null);
+
+    setLoadingAction("VALIDATE");
+    const res = await fetch(`/api/backoffice/applications/${application.id}/validate`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({}),
+    });
+    const data = await res.json().catch(() => ({}));
+    setLoadingAction(null);
+
+    if (!res.ok || data?.ok !== true) {
+      setMsg(data?.error ?? "Erro ao validar tecnicamente.");
+      return;
+    }
+
+    setMsg("Validado tecnicamente (pronto a enviar ao Presidente).");
+    router.refresh();
+  }
+
+  async function techSendToPresident() {
+    setMsg(null);
+
+    setLoadingAction("SEND_PRESIDENT");
+    const res = await fetch(`/api/backoffice/applications/${application.id}/send_to_president`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({}),
+    });
+    const data = await res.json().catch(() => ({}));
+    setLoadingAction(null);
+
+    if (!res.ok || data?.ok !== true) {
+      setMsg(data?.error ?? "Erro ao enviar ao Presidente.");
+      return;
+    }
+
+    setMsg("Enviado ao Presidente.");
+    router.refresh();
+  }
+
+  // Revisão documentos (já tinhas)
   async function reviewDoc(doc: DocRow, decision: "APPROVE" | "REJECT") {
     setDocMsg(null);
 
-    let comment: string | undefined;
+    let comment: string | undefined = undefined;
     if (decision === "REJECT") {
-      const c = window.prompt("Motivo da rejeição (obrigatório):") ?? "";
-      if (!c.trim()) return;
-      comment = c.trim();
+      const c = (window.prompt("Motivo da rejeição (obrigatório):") ?? "").trim();
+      if (!c) {
+        setDocMsg("Rejeição cancelada: comentário obrigatório.");
+        return;
+      }
+      comment = c;
     }
 
-    setLoading(doc.id);
-
+    setLoadingDocId(doc.id);
     const res = await fetch(`/api/backoffice/documents/${doc.id}/review`, {
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify({ decision, comment }),
     });
-
     const data = await res.json().catch(() => ({}));
-    setLoading(null);
+    setLoadingDocId(null);
 
     if (!res.ok || data?.ok !== true) {
       setDocMsg(data?.error ?? "Erro a rever documento.");
@@ -158,60 +221,6 @@ export default function BackofficeApplicationClient({
     }
 
     setDocMsg(decision === "APPROVE" ? "Documento aprovado." : "Documento rejeitado (pedido devolvido à entidade).");
-    router.refresh();
-  }
-
-  // -------- Deliberação (Tech) --------
-  const showDeliberationForm = status === "S8_SENT_TO_MEETING" || status === "S9_DELIBERATED" || status === "S10_AWAITING_EXPENSE" || status === "S15_CLOSED";
-
-  const [meetingDate, setMeetingDate] = useState<string>(deliberation?.meeting_date ?? "");
-  const [outcome, setOutcome] = useState<"APPROVED" | "REJECTED">(deliberation?.outcome ?? "APPROVED");
-  const [votesFor, setVotesFor] = useState<string>(deliberation?.votes_for != null ? String(deliberation.votes_for) : "");
-  const [votesAgainst, setVotesAgainst] = useState<string>(deliberation?.votes_against != null ? String(deliberation.votes_against) : "");
-  const [votesAbstain, setVotesAbstain] = useState<string>(deliberation?.votes_abstain != null ? String(deliberation.votes_abstain) : "");
-  const [approvedAmount, setApprovedAmount] = useState<string>(deliberation?.approved_amount != null ? String(deliberation.approved_amount) : "");
-  const [votingNotes, setVotingNotes] = useState<string>(deliberation?.voting_notes ?? "");
-  const [delibNotes, setDelibNotes] = useState<string>(deliberation?.deliberation_notes ?? "");
-  const [notifyEntity, setNotifyEntity] = useState<boolean>(true);
-
-  async function saveDeliberation(e: React.FormEvent) {
-    e.preventDefault();
-    setMsg(null);
-
-    if (!meetingDate) {
-      setMsg("Indica a data da reunião.");
-      return;
-    }
-
-    setLoading("deliberate");
-
-    const res = await fetch(`/api/backoffice/applications/${application.id}/deliberate`, {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({
-        meeting_date: meetingDate,
-        outcome,
-        votes_for: votesFor === "" ? null : Number(votesFor),
-        votes_against: votesAgainst === "" ? null : Number(votesAgainst),
-        votes_abstain: votesAbstain === "" ? null : Number(votesAbstain),
-        approved_amount: approvedAmount === "" ? null : Number(approvedAmount),
-        voting_notes: votingNotes || null,
-        deliberation_notes: delibNotes || null,
-        notify_entity: notifyEntity,
-      }),
-    });
-
-    const data = await res.json().catch(() => ({}));
-    setLoading(null);
-
-    if (!res.ok || data?.ok !== true) {
-      setMsg(data?.error ?? "Erro ao registar deliberação.");
-      return;
-    }
-
-    if (data?.warning) setMsg(`Deliberação registada. Aviso: ${data.warning}`);
-    else setMsg("Deliberação registada com sucesso.");
-
     router.refresh();
   }
 
@@ -228,112 +237,64 @@ export default function BackofficeApplicationClient({
             </p>
 
             <div className="mt-2 grid grid-cols-2 gap-x-6 gap-y-1 text-xs text-neutral-600">
-              <div><span className="text-neutral-500">Valor solicitado:</span> {money(application.requested_amount)}</div>
-              <div><span className="text-neutral-500">Valor aprovado:</span> {application.approved_amount != null ? money(application.approved_amount) : "-"}</div>
-              <div><span className="text-neutral-500">Origem:</span> {application.origin ?? "-"}</div>
-              <div><span className="text-neutral-500">Criado:</span> {fmtDate(application.created_at)}</div>
-              <div><span className="text-neutral-500">Atualizado:</span> {fmtDate(application.updated_at)}</div>
-              <div className="col-span-2"><span className="text-neutral-500">ID:</span> {application.id}</div>
+              <div>
+                <span className="text-neutral-500">Valor solicitado:</span> {money(application.requested_amount)}
+              </div>
+              <div>
+                <span className="text-neutral-500">Origem:</span> {application.origin ?? "-"}
+              </div>
+              <div>
+                <span className="text-neutral-500">Criado:</span> {fmtDate(application.created_at)}
+              </div>
+              <div>
+                <span className="text-neutral-500">Atualizado:</span> {fmtDate(application.updated_at)}
+              </div>
             </div>
-
-            {msg && <p className="mt-3 text-sm">{msg}</p>}
           </div>
 
           <span className="text-sm rounded-md border px-2 py-1">{status}</span>
         </div>
+
+        {/* ✅ AÇÕES TECH (repõe o que desapareceu) */}
+        <div className="mt-4 flex flex-wrap gap-2">
+          <button
+            type="button"
+            className="rounded-md border px-3 py-2 text-sm disabled:opacity-60"
+            disabled={!canValidateTech || loadingAction !== null}
+            onClick={techValidate}
+            title="Passa para S5_TECH_VALIDATED"
+          >
+            {loadingAction === "VALIDATE" ? "..." : "Validar tecnicamente"}
+          </button>
+
+          <button
+            type="button"
+            className="rounded-md border px-3 py-2 text-sm disabled:opacity-60"
+            disabled={!canReturnToEntity || loadingAction !== null}
+            onClick={techReturnToEntity}
+            title="Devolve à entidade (S4_RETURNED)"
+          >
+            {loadingAction === "RETURN" ? "..." : "Devolver à entidade"}
+          </button>
+
+          <button
+            type="button"
+            className="rounded-md bg-black px-3 py-2 text-sm text-white disabled:opacity-60"
+            disabled={!canSendToPresident || loadingAction !== null}
+            onClick={techSendToPresident}
+            title="Envia ao Presidente (S6_READY_FOR_PRESIDENT)"
+          >
+            {loadingAction === "SEND_PRESIDENT" ? "..." : "Enviar ao Presidente"}
+          </button>
+
+          {msg && <p className="text-sm ml-2 self-center">{msg}</p>}
+        </div>
       </section>
-
-      {/* Deliberação */}
-      {showDeliberationForm && (
-        <section className="rounded-2xl border p-4 shadow-sm">
-          <h2 className="font-medium">Reunião de Câmara · Deliberação</h2>
-
-          {status !== "S8_SENT_TO_MEETING" && deliberation && (
-            <p className="mt-2 text-sm text-neutral-600">
-              Deliberação registada em {fmtDate(deliberation.deliberated_at)} · Resultado: <b>{deliberation.outcome}</b>
-            </p>
-          )}
-
-          <form onSubmit={saveDeliberation} className="mt-4 grid gap-3">
-            <div className="grid gap-1">
-              <label className="text-sm">Data da reunião</label>
-              <input
-                type="date"
-                className="rounded-md border px-3 py-2"
-                value={meetingDate}
-                onChange={(e) => setMeetingDate(e.target.value)}
-                disabled={loading !== null}
-              />
-            </div>
-
-            <div className="grid gap-1">
-              <label className="text-sm">Resultado</label>
-              <select
-                className="rounded-md border px-3 py-2"
-                value={outcome}
-                onChange={(e) => setOutcome(e.target.value as any)}
-                disabled={loading !== null}
-              >
-                <option value="APPROVED">Aprovado</option>
-                <option value="REJECTED">Rejeitado</option>
-              </select>
-            </div>
-
-            <div className="grid grid-cols-3 gap-2">
-              <div className="grid gap-1">
-                <label className="text-sm">Votos a favor</label>
-                <input className="rounded-md border px-3 py-2" value={votesFor} onChange={(e) => setVotesFor(e.target.value)} inputMode="numeric" />
-              </div>
-              <div className="grid gap-1">
-                <label className="text-sm">Votos contra</label>
-                <input className="rounded-md border px-3 py-2" value={votesAgainst} onChange={(e) => setVotesAgainst(e.target.value)} inputMode="numeric" />
-              </div>
-              <div className="grid gap-1">
-                <label className="text-sm">Abstenções</label>
-                <input className="rounded-md border px-3 py-2" value={votesAbstain} onChange={(e) => setVotesAbstain(e.target.value)} inputMode="numeric" />
-              </div>
-            </div>
-
-            <div className="grid gap-1">
-              <label className="text-sm">Valor aprovado (€) (se aplicável)</label>
-              <input className="rounded-md border px-3 py-2" value={approvedAmount} onChange={(e) => setApprovedAmount(e.target.value)} inputMode="decimal" />
-            </div>
-
-            <div className="grid gap-1">
-              <label className="text-sm">Notas de votação</label>
-              <input className="rounded-md border px-3 py-2" value={votingNotes} onChange={(e) => setVotingNotes(e.target.value)} />
-            </div>
-
-            <div className="grid gap-1">
-              <label className="text-sm">Observações / Deliberação</label>
-              <textarea className="rounded-md border px-3 py-2 min-h-[90px]" value={delibNotes} onChange={(e) => setDelibNotes(e.target.value)} />
-            </div>
-
-            <label className="flex items-center gap-2 text-sm">
-              <input type="checkbox" checked={notifyEntity} onChange={(e) => setNotifyEntity(e.target.checked)} />
-              Notificar entidade por email (perfis ativos da entidade)
-            </label>
-
-            <button
-              className="rounded-md bg-black px-3 py-2 text-sm text-white disabled:opacity-60"
-              disabled={loading !== null || status !== "S8_SENT_TO_MEETING"}
-              title={status === "S8_SENT_TO_MEETING" ? "" : "Só disponível em S8_SENT_TO_MEETING"}
-            >
-              {loading === "deliberate" ? "A registar..." : "Registar deliberação"}
-            </button>
-
-            {status !== "S8_SENT_TO_MEETING" && (
-              <p className="text-xs text-neutral-600">
-                Nota: para registar deliberação, o pedido tem de estar em <b>S8_SENT_TO_MEETING</b>.
-              </p>
-            )}
-          </form>
-        </section>
-      )}
 
       {/* Documentos */}
       <section className="rounded-2xl border p-4 shadow-sm">
         <h2 className="font-medium">Documentos</h2>
+
         {docMsg && <p className="mt-3 text-sm">{docMsg}</p>}
 
         <div className="mt-4 overflow-auto">
@@ -359,24 +320,24 @@ export default function BackofficeApplicationClient({
                   </td>
                   <td className="py-2">{d.status}</td>
                   <td className="py-2">{d.review_comment ?? "-"}</td>
-                  <td className="py-2">{fmtDate(d.uploaded_at)}</td>
+                  <td className="py-2">{d.uploaded_at ? fmtDate(d.uploaded_at) : "-"}</td>
                   <td className="py-2">
                     <div className="flex gap-2">
                       <button
                         type="button"
                         className="rounded-md border px-3 py-1 disabled:opacity-60"
-                        disabled={loading === d.id}
+                        disabled={loadingDocId === d.id}
                         onClick={() => reviewDoc(d, "APPROVE")}
                       >
-                        {loading === d.id ? "..." : "Aprovar"}
+                        {loadingDocId === d.id ? "..." : "Aprovar"}
                       </button>
                       <button
                         type="button"
                         className="rounded-md border px-3 py-1 disabled:opacity-60"
-                        disabled={loading === d.id}
+                        disabled={loadingDocId === d.id}
                         onClick={() => reviewDoc(d, "REJECT")}
                       >
-                        {loading === d.id ? "..." : "Rejeitar"}
+                        {loadingDocId === d.id ? "..." : "Rejeitar"}
                       </button>
                     </div>
                   </td>
