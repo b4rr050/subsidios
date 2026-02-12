@@ -39,7 +39,7 @@ export default async function BackofficeApplicationsPage() {
     `
     )
     .eq("is_deleted", false)
-    .neq("current_status", "S1_DRAFT") // ✅ não mostrar rascunhos no backoffice
+    .neq("current_status", "S1_DRAFT") // ✅ esconder rascunhos
     .order("created_at", { ascending: false })
     .limit(200);
 
@@ -59,7 +59,7 @@ export default async function BackofficeApplicationsPage() {
       <header className="flex items-center justify-between">
         <div>
           <h1 className="text-xl font-semibold">Backoffice · Pedidos</h1>
-          <p className="text-sm text-neutral-600">Lista (últimos 200)</p>
+          <p className="text-sm text-neutral-600">Lista (últimos 200) — sem rascunhos</p>
         </div>
 
         <form
@@ -104,7 +104,7 @@ export default async function BackofficeApplicationsPage() {
 
                   <td className="py-2">{Number(a.requested_amount ?? 0).toFixed(2)} €</td>
                   <td className="py-2">{a.current_status}</td>
-                  <td className="py-2">{a.created_at ? new Date(a.created_at).toLocaleString() : "-"}</td>
+                  <td className="py-2">{a.created_at ? new Date(a.created_at).toLocaleString("pt-PT") : "-"}</td>
                 </tr>
               ))}
 
