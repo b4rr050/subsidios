@@ -49,6 +49,17 @@ type Hist = {
   comment: string | null;
 };
 
+type Deliberation = {
+  application_id: string;
+  meeting_date?: string | null;
+  outcome?: string | null;
+  votes_for?: number | null;
+  votes_against?: number | null;
+  abstentions?: number | null;
+  details?: string | null;
+  created_at?: string | null;
+} | null;
+
 function money(v: any) {
   const n = Number(v ?? 0);
   return `${n.toFixed(2)} €`;
@@ -68,6 +79,7 @@ export default function BackofficeApplicationClient({
   documentTypes,
   reviewHistory,
   reviewerById,
+  deliberation,
 }: {
   application: App;
   entity: Entity | null;
@@ -77,6 +89,7 @@ export default function BackofficeApplicationClient({
   documentTypes: DocType[];
   reviewHistory: ReviewRow[];
   reviewerById: Record<string, { email?: string | null; full_name?: string | null }>;
+  deliberation?: Deliberation;
 }) {
   const router = useRouter();
   const supabase = createClient();
@@ -103,7 +116,7 @@ export default function BackofficeApplicationClient({
   // 🔁 Ações Tech
   const canReturnToEntity = status === "S3_IN_REVIEW";
   const canValidateTech = status === "S3_IN_REVIEW";
-  const canSendToPresident = status === "S5_TECH_VALIDATED"; // ✅ aqui está o “loop” que faltava
+  const canSendToPresident = status === "S5_TECH_VALIDATED";
 
   async function openDoc(d: DocRow) {
     setDocMsg(null);
@@ -167,7 +180,7 @@ export default function BackofficeApplicationClient({
       return;
     }
 
-    setMsg("Validado tecnicamente (pronto a enviar ao Presidente).");
+    setMsg("Validado tecnicamente.");
     router.refresh();
   }
 
@@ -192,7 +205,6 @@ export default function BackofficeApplicationClient({
     router.refresh();
   }
 
-  // Revisão documentos (já tinhas)
   async function reviewDoc(doc: DocRow, decision: "APPROVE" | "REJECT") {
     setDocMsg(null);
 
@@ -255,14 +267,13 @@ export default function BackofficeApplicationClient({
           <span className="text-sm rounded-md border px-2 py-1">{status}</span>
         </div>
 
-        {/* ✅ AÇÕES TECH (repõe o que desapareceu) */}
-        <div className="mt-4 flex flex-wrap gap-2">
+        {/* AÇÕES TECH */}
+        <div className="mt-4 flex flex-wrap gap-2 items-center">
           <button
             type="button"
             className="rounded-md border px-3 py-2 text-sm disabled:opacity-60"
             disabled={!canValidateTech || loadingAction !== null}
             onClick={techValidate}
-            title="Passa para S5_TECH_VALIDATED"
           >
             {loadingAction === "VALIDATE" ? "..." : "Validar tecnicamente"}
           </button>
@@ -272,7 +283,6 @@ export default function BackofficeApplicationClient({
             className="rounded-md border px-3 py-2 text-sm disabled:opacity-60"
             disabled={!canReturnToEntity || loadingAction !== null}
             onClick={techReturnToEntity}
-            title="Devolve à entidade (S4_RETURNED)"
           >
             {loadingAction === "RETURN" ? "..." : "Devolver à entidade"}
           </button>
@@ -282,19 +292,44 @@ export default function BackofficeApplicationClient({
             className="rounded-md bg-black px-3 py-2 text-sm text-white disabled:opacity-60"
             disabled={!canSendToPresident || loadingAction !== null}
             onClick={techSendToPresident}
-            title="Envia ao Presidente (S6_READY_FOR_PRESIDENT)"
           >
             {loadingAction === "SEND_PRESIDENT" ? "..." : "Enviar ao Presidente"}
           </button>
 
-          {msg && <p className="text-sm ml-2 self-center">{msg}</p>}
+          {msg && <p className="text-sm ml-2">{msg}</p>}
         </div>
       </section>
+
+      {/* Deliberação (se existir) */}
+      {deliberation ? (
+        <section className="rounded-2xl border p-4 shadow-sm">
+          <h2 className="font-medium">Deliberação</h2>
+          <div className="mt-2 grid grid-cols-2 gap-x-6 gap-y-1 text-sm text-neutral-700">
+            <div>
+              <span className="text-neutral-500">Data reunião:</span> {fmtDate(deliberation.meeting_date ?? null)}
+            </div>
+            <div>
+              <span className="text-neutral-500">Resultado:</span> {deliberation.outcome ?? "-"}
+            </div>
+            <div>
+              <span className="text-neutral-500">Votos a favor:</span> {deliberation.votes_for ?? "-"}
+            </div>
+            <div>
+              <span className="text-neutral-500">Votos contra:</span> {deliberation.votes_against ?? "-"}
+            </div>
+            <div>
+              <span className="text-neutral-500">Abstenções:</span> {deliberation.abstentions ?? "-"}
+            </div>
+            <div className="col-span-2">
+              <span className="text-neutral-500">Detalhes:</span> {deliberation.details ?? "-"}
+            </div>
+          </div>
+        </section>
+      ) : null}
 
       {/* Documentos */}
       <section className="rounded-2xl border p-4 shadow-sm">
         <h2 className="font-medium">Documentos</h2>
-
         {docMsg && <p className="mt-3 text-sm">{docMsg}</p>}
 
         <div className="mt-4 overflow-auto">
@@ -320,7 +355,7 @@ export default function BackofficeApplicationClient({
                   </td>
                   <td className="py-2">{d.status}</td>
                   <td className="py-2">{d.review_comment ?? "-"}</td>
-                  <td className="py-2">{d.uploaded_at ? fmtDate(d.uploaded_at) : "-"}</td>
+                  <td className="py-2">{fmtDate(d.uploaded_at)}</td>
                   <td className="py-2">
                     <div className="flex gap-2">
                       <button
